@@ -20,7 +20,7 @@ public class AsyncConfig {
     private static final Logger log = LoggerFactory.getLogger(AsyncConfig.class);
 
     @Bean(name = "fileProcessExecutor")
-    public Executor fileProcessExecutor() {
+    public ThreadPoolTaskExecutor fileProcessExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
         executor.setCorePoolSize(5);
         executor.setMaxPoolSize(10);
@@ -37,7 +37,7 @@ public class AsyncConfig {
     }
 
     @Bean(name = "vectorizeExecutor")
-    public Executor vectorizeExecutor() {
+    public ThreadPoolTaskExecutor vectorizeExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
         int processors = Runtime.getRuntime().availableProcessors();
         executor.setCorePoolSize(processors);
@@ -55,7 +55,7 @@ public class AsyncConfig {
     }
 
     @Bean(name = "taskExecutor")
-    public Executor taskExecutor() {
+    public ThreadPoolTaskExecutor taskExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
         executor.setCorePoolSize(10);
         executor.setMaxPoolSize(20);
