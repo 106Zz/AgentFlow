@@ -1,0 +1,69 @@
+spring:
+  application:
+    name: ai-agent
+  
+  # 数据源配置
+  datasource:
+    url: jdbc:postgresql://pgm-bp19f2e2n9u253thdo.rwlb.rds.aliyuncs.com:5432/Agent_Hub
+    username: zzzz
+    password: 106Zz0106
+    driver-class-name: org.postgresql.Driver
+    
+    # HikariCP 连接池配置
+    hikari:
+      minimum-idle: 5                     # 最小空闲连接数
+      maximum-pool-size: 20               # 最大连接池大小
+      connection-timeout: 30000           # 连接超时时间（毫秒）
+      idle-timeout: 600000                # 空闲连接超时时间（10分钟）
+      max-lifetime: 1800000               # 连接最大存活时间（30分钟）
+      connection-test-query: SELECT 1     # 连接测试查询
+      pool-name: AgentHubHikariPool       # 连接池名称
+      initialization-fail-timeout: -1     # 初始化失败不阻止启动（开发阶段）
+  
+  # JPA配置
+  jpa:
+    hibernate:
+      ddl-auto: update                    # 自动更新表结构
+    show-sql: false                       # 生产环境关闭SQL日志
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+  
+  # 文件上传配置
+  servlet:
+    multipart:
+      max-file-size: 100MB
+      max-request-size: 100MB
+      enabled: true
+  
+  # AI配置
+  ai:
+    dashscope:
+      api-key: sk-2bb62fd51dd646e89e8bffddb8aed7dd
+      chat:
+        options:
+          model: deepseek-v3.2
+          enable-search: true
+          result-format: message
+          enable_thinking: true
+          stream: true
+          incremental_output: true
+      embedding:
+        options:
+          model: text-embedding-v3
+    
+    vectorstore:
+      pgvector:
+        index-type: HNSW
+        distance-type: COSINE_DISTANCE
+        dimensions: 1536
+        remove-existing-vector-store-table: false  # 不删除已有表
+
+# 应用配置
+app:
+  rag:
+    preload:
+      enabled: true
+      paths:
+        - "classpath:docs/company-rules/*.pdf"
