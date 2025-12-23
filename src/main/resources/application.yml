@@ -1,0 +1,78 @@
+spring:
+  profiles:
+    active: local  # 激活 application-local.yml 配置
+  
+  # JPA配置
+  jpa:
+    hibernate:
+      ddl-auto: update                    # 自动更新表结构
+    show-sql: false                       # 生产环境关闭SQL日志
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+  
+  # 文件上传配置
+  servlet:
+    multipart:
+      max-file-size: 100MB
+      max-request-size: 100MB
+      enabled: true
+
+server:
+  port: 8080
+
+# MyBatis-Plus配置
+mybatis-plus:
+  mapper-locations: classpath*:/mapper/**/*.xml
+  type-aliases-package: com.agenthub.**.domain
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+  global-config:
+    db-config:
+      logic-delete-field: delFlag
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+
+# Token配置
+token:
+  # 令牌自定义标识
+  header: Authorization
+  # 令牌密钥
+  secret: abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ
+  # 令牌有效期（默认30分钟）
+  expireTime: 30
+
+# 线程池配置
+thread-pool:
+  # 文件处理线程池
+  file-process:
+    core-pool-size: 5
+    max-pool-size: 10
+    queue-capacity: 100
+    keep-alive-seconds: 60
+  # 向量化线程池
+  vectorize:
+    core-pool-size: ${VECTORIZE_CORE_POOL_SIZE:4}
+    max-pool-size: ${VECTORIZE_MAX_POOL_SIZE:8}
+    queue-capacity: 200
+    keep-alive-seconds: 60
+  # 通用任务线程池
+  task:
+    core-pool-size: 10
+    max-pool-size: 20
+    queue-capacity: 500
+    keep-alive-seconds: 60
+
+# Knife4j配置
+knife4j:
+  enable: true
+  setting:
+    language: zh_cn
+
+# 日志配置
+logging:
+  level:
+    com.agenthub: debug
+    org.springframework.security: debug
