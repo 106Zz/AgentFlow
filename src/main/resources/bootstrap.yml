@@ -1,0 +1,13 @@
+spring:
+  application:
+    name: ai-agent  # 必须和 Nacos Data ID 前半部分一致
+  profiles:
+    active: local   # 本地仍用 local，生产部署时可覆盖为 prod
+  cloud:
+    nacos:
+      config:
+        server-addr: 124.70.190.134:8848  # 你的 Nacos 服务器地址（本地开发用这个，生产改成服务器IP）
+        namespace: agentHub         # 如果用了命名空间，填 ID；默认 public 不填
+        group: DEFAULT_GROUP
+        file-extension: yml       # 配置文件格式
+        refresh-enabled: true     # 启用热刷新（改 Nacos 配置后自动生效）

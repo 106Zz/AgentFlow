@@ -23,9 +23,9 @@ public class SysUser extends BaseEntity {
     private static final long serialVersionUID = 1L;
 
     /**
-     * 用户ID
+     * 用户ID（雪花算法生成）
      */
-    @TableId(type = IdType.AUTO)
+    @TableId(type = IdType.ASSIGN_ID)
     private Long userId;
 
     /**

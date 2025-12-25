@@ -56,10 +56,15 @@
 - **工具**: Hutool、Lombok
 - **API文档**: Knife4j (Swagger)
 
-### 前端（待开发）
-- Vue 3
-- Element Plus
-- Axios
+### 前端
+- **框架**: Vue 3.4+ (Composition API)
+- **语言**: TypeScript 5.0+
+- **构建工具**: Vite 5.0+
+- **UI组件库**: Element Plus 2.5+
+- **状态管理**: Pinia 2.1+
+- **路由**: Vue Router 4.2+
+- **HTTP客户端**: Axios 1.6+
+- **工具库**: dayjs、marked、highlight.js
 
 ## 项目结构
 
@@ -226,28 +231,56 @@ Content-Type: application/json
 
 ### 知识库接口
 
-#### 上传知识文件
+#### 获取OSS上传凭证（前端直传）
 ```
-POST /knowledge/base/upload
+GET /knowledge/base/upload/policy?filename=test.pdf
 Authorization: Bearer {token}
-Content-Type: multipart/form-data
 
-file: [文件]
-title: 知识标题
-category: 分类
-tags: 标签1,标签2
-isPublic: 0
+Response:
+{
+  "code": 200,
+  "data": {
+    "accessKeyId": "LTAI5t...",
+    "policy": "eyJleHBpcmF0aW9uIjoi...",
+    "signature": "xMj8z...",
+    "host": "https://your-bucket.oss-cn-guangzhou.aliyuncs.com",
+    "key": "knowledge/user/123/2025/12/25/abc123_test.pdf"
+  }
+}
+```
+
+#### 上传回调（创建知识库记录）
+```
+POST /knowledge/base/upload/callback
+Authorization: Bearer {token}
+Content-Type: application/json
+
+{
+  "fileName": "test.pdf",
+  "filePath": "knowledge/user/123/2025/12/25/abc123.pdf",
+  "fileSize": 1024000,
+  "title": "测试文档",
+  "category": "技术文档",
+  "tags": "测试,PDF",
+  "isPublic": "0"
+}
 ```
 
 #### 查询知识库列表
 ```
-GET /knowledge/base/list?pageNum=1&pageSize=10
+GET /knowledge/base/list?pageNum=1&pageSize=10&title=xxx
+Authorization: Bearer {token}
+```
+
+#### 删除知识库
+```
+DELETE /knowledge/base/{ids}
 Authorization: Bearer {token}
 ```
 
 ### 智能问答接口
 
-#### 发送问题
+#### 普通问答
 ```
 POST /knowledge/chat/ask
 Authorization: Bearer {token}
@@ -262,9 +295,35 @@ Content-Type: application/json
 }
 ```
 
+#### 流式问答（SSE）
+```
+POST /knowledge/chat/stream
+Authorization: Bearer {token}
+Content-Type: application/json
+
+{
+  "sessionId": "session-uuid",
+  "question": "广东省2026年电力市场交易政策是什么？"
+}
+
+Response: text/event-stream (逐字返回答案)
+```
+
+#### 获取会话列表
+```
+GET /knowledge/chat/sessions
+Authorization: Bearer {token}
+```
+
 #### 获取聊天历史
 ```
 GET /knowledge/chat/history/{sessionId}
+Authorization: Bearer {token}
+```
+
+#### 清空聊天历史
+```
+DELETE /knowledge/chat/history/{sessionId}
 Authorization: Bearer {token}
 ```
 
@@ -284,9 +343,10 @@ Authorization: Bearer {token}
 - 自定义认证失败处理
 
 ### 3. 跨域配置
-- 支持所有域名跨域访问
-- 允许携带Cookie
-- 支持所有HTTP方法
+- 支持所有域名跨域访问（已配置CorsConfig）
+- 允许携带Cookie和Authorization头
+- 支持所有HTTP方法（GET/POST/PUT/DELETE）
+- 前端开发环境可使用Vite代理
 
 ### 4. 数据隔离
 - 管理员可查看所有知识库
@@ -294,21 +354,93 @@ Authorization: Bearer {token}
 - 基于userId的数据过滤
 
 ### 5. RAG问答
-- 向量检索相关知识片段
-- 结合大语言模型生成回答
+- 向量检索相关知识片段（基于PGVector）
+- 结合大语言模型生成回答（阿里云DashScope）
 - 返回知识来源和相似度评分
-- 支持多轮对话
+- 支持多轮对话和会话管理
+- 支持流式响应（SSE）和普通响应
 
-## 待实现功能
+### 6. OSS直传
+- 前端直接上传文件到阿里云OSS
+- 不占用服务器带宽
+- 支持上传进度显示
+- 后端只负责生成临时凭证和创建记录
 
-- [ ] 知识库服务实现类（文件上传、解析、向量化）
-- [ ] 聊天服务实现类（RAG检索、LLM调用）
-- [ ] 文件存储服务（本地/OSS）
-- [ ] 异步任务处理（文档解析和向量化）
-- [ ] 前端Vue3界面开发
-- [ ] 用户个人中心
-- [ ] 知识库统计分析
-- [ ] 导出功能
+## 前端开发
+
+前端应用基于Vue 3 + TypeScript + Element Plus构建，提供现代化的用户界面和流畅的交互体验。
+
+### 前端功能特性
+
+**已规划功能**：
+- ✅ 用户认证（登录/注册/JWT Token管理）
+- ✅ 知识库管理（列表/上传/删除/搜索）
+- ✅ OSS直传（前端直接上传到阿里云OSS）
+- ✅ 智能问答（流式响应/多轮对话）
+- ✅ 会话管理（创建/切换/删除会话）
+- ✅ 响应式布局（桌面/移动端适配）
+- ✅ 权限控制（管理员/普通用户）
+
+### 前端开发文档
+
+详细的前端开发规范和任务列表请查看：
+- **需求文档**: `.kiro/specs/frontend-development/requirements.md`
+- **设计文档**: `.kiro/specs/frontend-development/design.md`
+- **任务列表**: `.kiro/specs/frontend-development/tasks.md`
+
+### 前端快速开始
+
+```bash
+# 进入前端目录（待创建）
+cd frontend
+
+# 安装依赖
+npm install
+
+# 启动开发服务器
+npm run dev
+
+# 构建生产版本
+npm run build
+```
+
+### 前端环境配置
+
+创建 `.env.development` 文件：
+```env
+VITE_API_BASE_URL=http://localhost:8080
+VITE_APP_TITLE=电力知识库管理系统
+```
+
+### 前端核心功能
+
+1. **用户认证**
+   - JWT Token自动管理
+   - 路由守卫保护
+   - Token过期自动跳转
+
+2. **文件上传**
+   - OSS前端直传（不占用服务器带宽）
+   - 上传进度实时显示
+   - 支持批量上传
+   - 文件类型和大小验证
+
+3. **智能问答**
+   - 流式响应（逐字显示答案）
+   - 多轮对话支持
+   - 知识来源引用
+   - Markdown渲染
+
+4. **权限管理**
+   - 管理员可查看所有知识库
+   - 普通用户只能查看公开知识库和自己的私有知识库
+   - 删除权限自动校验
+
+## 项目文档
+
+- **数据隔离方案**: `docs/DATA_ISOLATION.md`
+- **OSS直传方案**: `docs/OSS_DIRECT_UPLOAD.md`
+- **前端开发规范**: `.kiro/specs/frontend-development/`
 
 ## 开发规范
 

@@ -19,9 +19,9 @@ public class FileUploadLog implements Serializable {
     private static final long serialVersionUID = 1L;
 
     /**
-     * 日志ID
+     * 日志ID（雪花算法生成）
      */
-    @TableId(type = IdType.AUTO)
+    @TableId(type = IdType.ASSIGN_ID)
     private Long id;
 
     /**

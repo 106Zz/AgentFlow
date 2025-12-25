@@ -20,9 +20,9 @@ public class KnowledgeBase extends BaseEntity {
     private static final long serialVersionUID = 1L;
 
     /**
-     * 知识库ID
+     * 知识库ID（雪花算法生成）
      */
-    @TableId(type = IdType.AUTO)
+    @TableId(type = IdType.ASSIGN_ID)
     private Long id;
 
     /**

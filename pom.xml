@@ -5,7 +5,7 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>3.4.12</version>
+        <version>4.0.0</version>
         <relativePath/> <!-- lookup parent from repository -->
     </parent>
     <groupId>com.AgentHub.api</groupId>
@@ -28,9 +28,36 @@
     </scm>
     <properties>
         <java.version>21</java.version>
-        <spring-ai.version>1.1.0-SNAPSHOT</spring-ai.version>
+        <spring-ai.version>2.0.0-M1</spring-ai.version>
+        <spring-boot.version>4.0.0</spring-boot.version>  <!-- 必须升级 Boot -->
         <jwt.version>0.12.6</jwt.version>
+        <spring-cloud-alibaba.version>2025.0.0.0</spring-cloud-alibaba.version>
     </properties>
+
+    <repositories>
+        <repository>
+            <id>spring-milestones</id>
+            <name>Spring Milestones</name>
+            <url>https://repo.spring.io/milestone</url>
+            <releases>
+                <enabled>true</enabled>  <!-- 必须加这一行！ -->
+            </releases>
+            <snapshots>
+                <enabled>false</enabled> <!-- 可选，关闭 snapshots -->
+            </snapshots>
+        </repository>
+
+        <!-- 如果你以后想用 snapshot 版本，再加这个 -->
+        <!--
+        <repository>
+            <id>spring-snapshots</id>
+            <url>https://repo.spring.io/snapshot</url>
+            <snapshots>
+                <enabled>true</enabled>
+            </snapshots>
+        </repository>
+        -->
+    </repositories>
 
     <dependencyManagement>
         <dependencies>
@@ -200,6 +227,39 @@
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
         </dependency>
+
+        <!-- 阿里云OSS -->
+        <dependency>
+            <groupId>com.aliyun.oss</groupId>
+            <artifactId>aliyun-sdk-oss</artifactId>
+            <version>3.17.4</version>
+        </dependency>
+
+        <!-- Redis -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+        <!-- Redis 连接池 -->
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-pool2</artifactId>
+        </dependency>
+
+        <!-- 添加官方 Redis Chat Memory（版本由 BOM 管理） -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-model-chat-memory-repository-redis</artifactId>  <!-- 注意这个名字 -->
+            <version>${spring-ai.version}</version>
+        </dependency>
+
+<!--        nacos配置中心-->
+        <dependency>
+            <groupId>com.alibaba.cloud</groupId>
+            <artifactId>spring-cloud-starter-alibaba-nacos-config</artifactId>
+            <version>${spring-cloud-alibaba.version}</version>
+        </dependency>
+
     </dependencies>
 
     <build>
