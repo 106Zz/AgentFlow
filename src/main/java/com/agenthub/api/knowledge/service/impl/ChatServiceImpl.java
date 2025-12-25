@@ -1,6 +1,6 @@
 package com.agenthub.api.knowledge.service.impl;
 
-import com.agenthub.api.ai.service.impl.RagChatServiceImpl;
+import com.agenthub.api.ai.service.impl.RagChatServiceImplV2;
 import com.agenthub.api.common.utils.SecurityUtils;
 import com.agenthub.api.knowledge.domain.ChatHistory;
 import com.agenthub.api.knowledge.domain.vo.ChatRequest;
@@ -23,7 +23,7 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class ChatServiceImpl implements IChatService {
 
-    private final RagChatServiceImpl ragChatService;
+    private final RagChatServiceImplV2 ragChatService;
     private final IChatHistoryService chatHistoryService;
 
     @Override

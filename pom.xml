@@ -5,7 +5,7 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>4.0.0</version>
+        <version>3.3.5</version>
         <relativePath/> <!-- lookup parent from repository -->
     </parent>
     <groupId>com.AgentHub.api</groupId>
@@ -28,43 +28,18 @@
     </scm>
     <properties>
         <java.version>21</java.version>
-        <spring-ai.version>2.0.0-M1</spring-ai.version>
-        <spring-boot.version>4.0.0</spring-boot.version>  <!-- 必须升级 Boot -->
+        <spring-boot.version>3.3.5</spring-boot.version>
         <jwt.version>0.12.6</jwt.version>
-        <spring-cloud-alibaba.version>2025.0.0.0</spring-cloud-alibaba.version>
+        <spring-cloud-alibaba.version>2023.0.1.2</spring-cloud-alibaba.version>
+        <langchain4j.version>0.36.2</langchain4j.version>
     </properties>
-
-    <repositories>
-        <repository>
-            <id>spring-milestones</id>
-            <name>Spring Milestones</name>
-            <url>https://repo.spring.io/milestone</url>
-            <releases>
-                <enabled>true</enabled>  <!-- 必须加这一行！ -->
-            </releases>
-            <snapshots>
-                <enabled>false</enabled> <!-- 可选，关闭 snapshots -->
-            </snapshots>
-        </repository>
-
-        <!-- 如果你以后想用 snapshot 版本，再加这个 -->
-        <!--
-        <repository>
-            <id>spring-snapshots</id>
-            <url>https://repo.spring.io/snapshot</url>
-            <snapshots>
-                <enabled>true</enabled>
-            </snapshots>
-        </repository>
-        -->
-    </repositories>
 
     <dependencyManagement>
         <dependencies>
             <dependency>
-                <groupId>org.springframework.ai</groupId>
-                <artifactId>spring-ai-bom</artifactId>
-                <version>${spring-ai.version}</version>
+                <groupId>dev.langchain4j</groupId>
+                <artifactId>langchain4j-bom</artifactId>
+                <version>${langchain4j.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -109,16 +84,28 @@
             <artifactId>spring-boot-starter-validation</artifactId>
         </dependency>
 
-        <!-- PGVector Starter -->
+        <!-- LangChain4j Core -->
         <dependency>
-            <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-starter-vector-store-pgvector</artifactId>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j</artifactId>
         </dependency>
 
-        <!-- RAG Advisors -->
+        <!-- LangChain4j DashScope (阿里云通义千问) -->
         <dependency>
-            <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-advisors-vector-store</artifactId>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j-dashscope</artifactId>
+        </dependency>
+
+        <!-- LangChain4j PGVector -->
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j-pgvector</artifactId>
+        </dependency>
+
+        <!-- LangChain4j Embeddings -->
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j-embeddings</artifactId>
         </dependency>
 
         <!-- Tika 核心库 -->
@@ -169,14 +156,7 @@
             <version>3.0.3</version>
         </dependency>
 
-        <!-- 阿里 Starter -->
-        <dependency>
-            <groupId>com.alibaba.cloud.ai</groupId>
-            <artifactId>spring-ai-alibaba-starter-dashscope</artifactId>
-            <version>1.1.0.0-RC1</version>
-        </dependency>
-
-        <!-- DashScope SDK -->
+        <!-- DashScope SDK (LangChain4j 会自动使用) -->
         <dependency>
             <groupId>com.alibaba</groupId>
             <artifactId>dashscope-sdk-java</artifactId>
@@ -246,18 +226,21 @@
             <artifactId>commons-pool2</artifactId>
         </dependency>
 
-        <!-- 添加官方 Redis Chat Memory（版本由 BOM 管理） -->
-        <dependency>
-            <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-starter-model-chat-memory-repository-redis</artifactId>  <!-- 注意这个名字 -->
-            <version>${spring-ai.version}</version>
-        </dependency>
-
 <!--        nacos配置中心-->
         <dependency>
             <groupId>com.alibaba.cloud</groupId>
             <artifactId>spring-cloud-starter-alibaba-nacos-config</artifactId>
             <version>${spring-cloud-alibaba.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.retry</groupId>
+            <artifactId>spring-retry</artifactId>
+            <version>2.0.6</version>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-aop</artifactId>
         </dependency>
 
     </dependencies>
@@ -272,6 +255,7 @@
                         <path>
                             <groupId>org.projectlombok</groupId>
                             <artifactId>lombok</artifactId>
+                            <version>${lombok.version}</version>
                         </path>
                     </annotationProcessorPaths>
                 </configuration>

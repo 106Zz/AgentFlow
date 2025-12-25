@@ -2,68 +2,98 @@ spring:
   application:
     name: ai-agent
   
-  # 数据源配置
+  cloud:
+    nacos:
+      config:
+        import-check:
+          enabled: false  # 禁用 Nacos 配置导入强制检查
+
+  # 数据源配置（已很好，无需改）
   datasource:
     url: jdbc:postgresql://pgm-bp19f2e2n9u253thdo.rwlb.rds.aliyuncs.com:5432/Agent_Hub
     username: zzzz
     password: 106Zz0106
     driver-class-name: org.postgresql.Driver
-    
-    # HikariCP 连接池配置
     hikari:
-      minimum-idle: 5                     # 最小空闲连接数
-      maximum-pool-size: 20               # 最大连接池大小
-      connection-timeout: 30000           # 连接超时时间（毫秒）
-      idle-timeout: 600000                # 空闲连接超时时间（10分钟）
-      max-lifetime: 1800000               # 连接最大存活时间（30分钟）
-      connection-test-query: SELECT 1     # 连接测试查询
-      pool-name: AgentHubHikariPool       # 连接池名称
-      initialization-fail-timeout: -1     # 初始化失败不阻止启动（开发阶段）
-  
-  # JPA配置
+      minimum-idle: 5
+      maximum-pool-size: 20
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+      connection-test-query: SELECT 1
+      pool-name: AgentHubHikariPool
+      initialization-fail-timeout: -1
+
+  # JPA配置（已很好）
   jpa:
     hibernate:
-      ddl-auto: update                    # 自动更新表结构
-    show-sql: false                       # 生产环境关闭SQL日志
+      ddl-auto: update
+    show-sql: false
     properties:
       hibernate:
         dialect: org.hibernate.dialect.PostgreSQLDialect
         format_sql: true
-  
-  # 文件上传配置
+
+  # 文件上传（已很好）
   servlet:
     multipart:
       max-file-size: 100MB
       max-request-size: 100MB
       enabled: true
-  
-  # AI配置
-  ai:
-    dashscope:
-      api-key: sk-2bb62fd51dd646e89e8bffddb8aed7dd
-      chat:
-        options:
-          model: deepseek-v3.2
-          enable-search: true
-          result-format: message
-          enable_thinking: true
-          stream: true
-          incremental_output: true
-      embedding:
-        options:
-          model: text-embedding-v3
-    
-    vectorstore:
-      pgvector:
-        index-type: HNSW
-        distance-type: COSINE_DISTANCE
-        dimensions: 1536
-        remove-existing-vector-store-table: false  # 不删除已有表
 
-# 应用配置
+  # Redis 配置
+  data:
+    redis:
+      host: 124.70.190.134
+      port: 6379
+      password:                     # 如果有密码请填写
+      database: 0
+      timeout: 10000ms
+      client-type: lettuce
+      lettuce:
+        pool:
+          max-active: 20
+          max-idle: 10
+          min-idle: 5
+          max-wait: 2000ms
+        shutdown-timeout: 100ms
+
+# ========== LangChain4j 配置 ==========
+langchain4j:
+  dashscope:
+    api-key: sk-2bb62fd51dd646e89e8bffddb8aed7dd
+    chat-model:
+      model-name: qwen-max
+      temperature: 0.7
+      top-p: 0.9
+      max-tokens: 2000
+    embedding-model:
+      model-name: text-embedding-v3
+    
+  pgvector:
+    host: pgm-bp19f2e2n9u253thdo.rwlb.rds.aliyuncs.com
+    port: 5432
+    database: Agent_Hub
+    user: zzzz
+    password: 106Zz0106
+    dimension: 1536
+    table: langchain4j_embeddings
+    index-type: HNSW
+    create-table: true
+    drop-table-first: false
+
+# 应用自定义配置
 app:
   rag:
     preload:
       enabled: true
       paths:
         - "classpath:docs/company-rules/*.pdf"
+
+aliyun:
+  oss:
+    endpoint: ${ALIYUN_OSS_ENDPOINT:oss-cn-shanghai.aliyuncs.com}  # 只留非敏感的默认
+    accessKeyId: ${ALIYUN_OSS_ACCESS_KEY_ID}
+    accessKeySecret: ${ALIYUN_OSS_ACCESS_KEY_SECRET}
+    bucketName: ${ALIYUN_OSS_BUCKET_NAME:agenthub-knowledge}
+    urlPrefix: ${ALIYUN_OSS_URL_PREFIX:''}
