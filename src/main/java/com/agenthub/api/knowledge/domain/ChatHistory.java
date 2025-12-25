@@ -19,9 +19,9 @@ public class ChatHistory extends BaseEntity {
     private static final long serialVersionUID = 1L;
 
     /**
-     * 聊天记录ID
+     * 聊天记录ID（雪花算法生成）
      */
-    @TableId(type = IdType.AUTO)
+    @TableId(type = IdType.ASSIGN_ID)
     private Long id;
 
     /**
@@ -45,9 +45,14 @@ public class ChatHistory extends BaseEntity {
     private String answer;
 
     /**
-     * 引用的知识来源（JSON格式）
+     * 引用的知识来源（JSONB格式）
      */
     private String sources;
+
+    /**
+     * Token消耗数量（用于成本统计）
+     */
+    private Integer tokenCount;
 
     /**
      * 问答类型（general普通问答/policy政策咨询/calculation计算分析）

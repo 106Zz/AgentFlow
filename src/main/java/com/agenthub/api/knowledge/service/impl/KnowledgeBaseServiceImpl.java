@@ -1,24 +1,37 @@
 package com.agenthub.api.knowledge.service.impl;
 
+import cn.hutool.core.util.ObjectUtil;
 import cn.hutool.core.util.StrUtil;
+import com.agenthub.api.ai.service.impl.DocumentProcessServiceImpl;
 import com.agenthub.api.common.core.page.PageQuery;
 import com.agenthub.api.common.core.page.PageResult;
 import com.agenthub.api.common.exception.ServiceException;
+import com.agenthub.api.common.utils.OssUtils;
 import com.agenthub.api.knowledge.domain.KnowledgeBase;
 import com.agenthub.api.knowledge.mapper.KnowledgeBaseMapper;
 import com.agenthub.api.knowledge.service.IKnowledgeBaseService;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-import org.springframework.web.multipart.MultipartFile;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 
 /**
  * 知识库服务实现类
  */
+@Slf4j
 @Service
+@RequiredArgsConstructor
 public class KnowledgeBaseServiceImpl extends ServiceImpl<KnowledgeBaseMapper, KnowledgeBase> 
         implements IKnowledgeBaseService {
+
+    private final DocumentProcessServiceImpl documentProcessService;
+    private final OssUtils ossUtils;
 
     @Override
     public PageResult<KnowledgeBase> selectKnowledgePage(KnowledgeBase knowledge, PageQuery pageQuery) {
@@ -30,48 +43,6 @@ public class KnowledgeBaseServiceImpl extends ServiceImpl<KnowledgeBaseMapper, K
         
         IPage<KnowledgeBase> page = this.page(pageQuery.build(), wrapper);
         return PageResult.build(page);
-    }
-
-    @Override
-    public KnowledgeBase uploadKnowledge(MultipartFile file, KnowledgeBase knowledge) {
-        // TODO: 实现文件上传逻辑
-        // 1. 保存文件到本地或OSS
-        // 2. 提取文件信息
-        // 3. 保存到数据库
-        // 4. 异步处理向量化
-        
-        if (file.isEmpty()) {
-            throw new ServiceException("上传文件不能为空");
-        }
-        
-        // 设置文件信息
-        knowledge.setFileName(file.getOriginalFilename());
-        knowledge.setFileSize(file.getSize());
-        knowledge.setVectorStatus("0"); // 未处理
-        
-        // 保存到数据库
-        this.save(knowledge);
-        
-        return knowledge;
-    }
-
-    @Override
-    public void processAndVectorize(Long knowledgeId) {
-        // TODO: 实现向量化处理
-        // 1. 读取文件
-        // 2. 解析内容
-        // 3. 分块
-        // 4. 向量化
-        // 5. 存储到向量数据库
-        
-        KnowledgeBase knowledge = this.getById(knowledgeId);
-        if (knowledge == null) {
-            throw new ServiceException("知识库不存在");
-        }
-        
-        // 更新状态为处理中
-        knowledge.setVectorStatus("1");
-        this.updateById(knowledge);
     }
 
     @Override
@@ -93,5 +64,154 @@ public class KnowledgeBaseServiceImpl extends ServiceImpl<KnowledgeBaseMapper, K
         
         IPage<KnowledgeBase> page = this.page(pageQuery.build(), wrapper);
         return PageResult.build(page);
+    }
+
+    @Override
+    public Map<String, String> getUploadPolicy(Long userId, boolean isAdmin, String filename) {
+        // 定义上传目录：管理员上传到 public/，普通用户到 user/{userId}/
+        String dir = isAdmin ? "knowledge/public/" : "knowledge/user/" + userId + "/";
+        
+        // 调用 OssUtils 生成临时上传策略
+        return ossUtils.generateUploadPolicy(dir, filename);
+    }
+
+    @Override
+    public KnowledgeBase handleUploadCallback(KnowledgeBase knowledge, Long userId, boolean isAdmin) {
+        // 1. 参数校验
+        if (StrUtil.isAllBlank(knowledge.getFileName(), knowledge.getFilePath())) {
+            throw new ServiceException("文件名或OSS路径不能为空");
+        }
+        if (knowledge.getFileSize() == null || knowledge.getFileSize() <= 0) {
+            throw new ServiceException("文件大小无效");
+        }
+
+        // 2. 验证文件是否真实存在（防篡改）
+        if (!ossUtils.doesObjectExist(knowledge.getFilePath())) {
+            throw new ServiceException("上传文件在OSS中不存在，请检查");
+        }
+
+        // 3. 权限处理
+        if (isAdmin) {
+            // 管理员可以指定公开或私有
+            if ("1".equals(knowledge.getIsPublic())) {
+                knowledge.setUserId(0L);  // 全局知识库
+            } else {
+                knowledge.setUserId(userId);
+            }
+        } else {
+            // 普通用户强制私有
+            knowledge.setUserId(userId);
+            knowledge.setIsPublic("0");
+        }
+
+        // 4. 设置默认值
+        if (StrUtil.isBlank(knowledge.getTitle())) {
+            knowledge.setTitle(knowledge.getFileName());
+        }
+        if (StrUtil.isBlank(knowledge.getFileType())) {
+            knowledge.setFileType(getFileType(knowledge.getFileName()));
+        }
+        knowledge.setVectorStatus("0");  // 未处理
+        knowledge.setStatus("0");
+
+        // 5. 保存记录
+        boolean saved = this.save(knowledge);
+        if (!saved) {
+            throw new ServiceException("保存知识库记录失败");
+        }
+
+        // 6. 异步处理文档解析和向量化
+        documentProcessService.processKnowledgeAsync(knowledge.getId());
+
+        log.info("知识库上传成功，ID: {}, 文件: {}, 用户: {}", 
+                knowledge.getId(), knowledge.getFileName(), userId);
+
+        return knowledge;
+    }
+
+    @Override
+    public List<KnowledgeBase> handleBatchUploadCallback(List<KnowledgeBase> knowledgeList, Long userId, boolean isAdmin) {
+        if (knowledgeList == null || knowledgeList.isEmpty()) {
+            throw new ServiceException("上传列表不能为空");
+        }
+
+        List<KnowledgeBase> savedList = new ArrayList<>();
+        List<Long> ids = new ArrayList<>();
+
+        for (KnowledgeBase knowledge : knowledgeList) {
+            try {
+                KnowledgeBase saved = handleUploadCallback(knowledge, userId, isAdmin);
+                savedList.add(saved);
+                ids.add(saved.getId());
+            } catch (Exception e) {
+                log.error("批量上传处理失败，文件: {}", knowledge.getFileName(), e);
+                // 继续处理其他文件
+            }
+        }
+
+        // 批量异步处理
+        if (!ids.isEmpty()) {
+            documentProcessService.batchProcessKnowledge(ids.toArray(new Long[0]));
+        }
+
+        log.info("批量上传成功，共 {} 个文件", savedList.size());
+        return savedList;
+    }
+
+    @Override
+    public boolean deleteKnowledgeWithFiles(Long[] ids, Long userId, boolean isAdmin) {
+        for (Long id : ids) {
+            KnowledgeBase knowledge = this.getById(id);
+            if (knowledge == null) {
+                continue;
+            }
+            
+            // 权限检查：管理员可以删除所有，普通用户只能删除自己的
+            if (!isAdmin && !knowledge.getUserId().equals(userId)) {
+                log.warn("用户 {} 尝试删除不属于自己的知识库 {}", userId, id);
+                throw new ServiceException("无权删除该知识库");
+            }
+            
+            // 删除OSS文件
+            if (knowledge.getFilePath() != null) {
+                try {
+                    ossUtils.deleteFile(knowledge.getFilePath());
+                    log.info("删除OSS文件成功: {}", knowledge.getFilePath());
+                } catch (Exception e) {
+                    log.error("删除OSS文件失败: {}", knowledge.getFilePath(), e);
+                }
+            }
+            
+            // 删除向量数据（调用已有的方法）
+            try {
+                documentProcessService.deleteKnowledgeVectors(id);
+                log.info("删除向量数据成功: {}", id);
+            } catch (Exception e) {
+                log.error("删除向量数据失败: {}", id, e);
+            }
+        }
+        
+        // 删除数据库记录
+        return this.removeBatchByIds(java.util.Arrays.asList(ids));
+    }
+
+    /**
+     * 获取文件类型
+     */
+    private String getFileType(String filename) {
+        if (filename == null || !filename.contains(".")) {
+            return "unknown";
+        }
+        String extension = filename.substring(filename.lastIndexOf(".") + 1).toLowerCase();
+        return switch (extension) {
+            case "pdf" -> "pdf";
+            case "doc", "docx" -> "word";
+            case "xls", "xlsx" -> "excel";
+            case "ppt", "pptx" -> "ppt";
+            case "jpg", "jpeg", "png", "gif", "bmp" -> "image";
+            case "txt" -> "text";
+            case "md" -> "markdown";
+            default -> "other";
+        };
     }
 }
