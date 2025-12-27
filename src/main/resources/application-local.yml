@@ -63,13 +63,16 @@ langchain4j:
   dashscope:
     api-key: sk-2bb62fd51dd646e89e8bffddb8aed7dd
     chat-model:
-      model-name: qwen-max
+      model-name: deepseek-v3.2
       temperature: 0.7
       top-p: 0.9
       max-tokens: 2000
     embedding-model:
       model-name: text-embedding-v3
-    
+    scoring-model:
+      model-name: gte-rerank-v2  # 对应你原来的 gte-rerank-v2
+
+  # PGVector 配置（注意：路径是 pgvector 不是 vector-store.pg-vector）
   pgvector:
     host: pgm-bp19f2e2n9u253thdo.rwlb.rds.aliyuncs.com
     port: 5432
@@ -78,9 +81,7 @@ langchain4j:
     password: 106Zz0106
     dimension: 1536
     table: langchain4j_embeddings
-    index-type: HNSW
     create-table: true
-    drop-table-first: false
 
 # 应用自定义配置
 app:
@@ -92,8 +93,8 @@ app:
 
 aliyun:
   oss:
-    endpoint: ${ALIYUN_OSS_ENDPOINT:oss-cn-shanghai.aliyuncs.com}  # 只留非敏感的默认
-    accessKeyId: ${ALIYUN_OSS_ACCESS_KEY_ID}
-    accessKeySecret: ${ALIYUN_OSS_ACCESS_KEY_SECRET}
-    bucketName: ${ALIYUN_OSS_BUCKET_NAME:agenthub-knowledge}
-    urlPrefix: ${ALIYUN_OSS_URL_PREFIX:''}
+    endpoint: oss-cn-shanghai.aliyuncs.com
+    accessKeyId: LTAI5t6kQLvYMEmHT6jgExW2  # 请填写你的实际 AccessKeyId
+    accessKeySecret: iPeKcVDOV6N2biyQFLzZK1lnSyFk0U  # 请填写你的实际 AccessKeySecret
+    bucketName: agenthub-knowledge
+    urlPrefix: ''

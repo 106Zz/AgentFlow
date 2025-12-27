@@ -1,16 +1,25 @@
 package com.agenthub.api.ai.config;
 
+import com.agenthub.api.ai.model.DashScopeScoringModel;
 import dev.langchain4j.data.segment.TextSegment;
+import dev.langchain4j.memory.chat.ChatMemoryProvider;
+import dev.langchain4j.memory.chat.MessageWindowChatMemory;
 import dev.langchain4j.model.chat.ChatLanguageModel;
 import dev.langchain4j.model.dashscope.QwenChatModel;
 import dev.langchain4j.model.dashscope.QwenEmbeddingModel;
+import dev.langchain4j.model.dashscope.QwenStreamingChatModel;
+import dev.langchain4j.model.chat.StreamingChatLanguageModel;
 import dev.langchain4j.model.embedding.EmbeddingModel;
+import dev.langchain4j.model.scoring.ScoringModel;
 import dev.langchain4j.store.embedding.EmbeddingStore;
 import dev.langchain4j.store.embedding.pgvector.PgVectorEmbeddingStore;
+import dev.langchain4j.store.memory.chat.ChatMemoryStore;
+import dev.langchain4j.store.memory.chat.redis.RedisChatMemoryStore;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import redis.clients.jedis.JedisPooled;
 
 /**
  * LangChain4j 配置类
@@ -33,6 +42,9 @@ public class LangChain4jConfig {
 
     @Value("${langchain4j.dashscope.embedding-model.model-name:text-embedding-v3}")
     private String embeddingModelName;
+
+    @Value("${langchain4j.dashscope.scoring-model.model-name:gte-rerank-v2}")
+    private String scoringModelName;
 
     @Value("${langchain4j.pgvector.host}")
     private String pgHost;
@@ -58,6 +70,15 @@ public class LangChain4jConfig {
     @Value("${langchain4j.pgvector.create-table:true}")
     private Boolean createTable;
 
+    @Value("${spring.data.redis.host:localhost}")
+    private String redisHost;
+
+    @Value("${spring.data.redis.port:6379}")
+    private Integer redisPort;
+
+    @Value("${spring.data.redis.password:}")
+    private String redisPassword;
+
     /**
      * 通义千问聊天模型
      */
@@ -65,6 +86,20 @@ public class LangChain4jConfig {
     public ChatLanguageModel chatLanguageModel() {
         log.info("初始化 ChatLanguageModel: {}", chatModelName);
         return QwenChatModel.builder()
+                .apiKey(apiKey)
+                .modelName(chatModelName)
+                .temperature(temperature.floatValue())
+                .maxTokens(maxTokens)
+                .build();
+    }
+
+    /**
+     * 通义千问流式聊天模型
+     */
+    @Bean
+    public StreamingChatLanguageModel streamingChatLanguageModel() {
+        log.info("初始化 StreamingChatLanguageModel: {}", chatModelName);
+        return QwenStreamingChatModel.builder()
                 .apiKey(apiKey)
                 .modelName(chatModelName)
                 .temperature(temperature.floatValue())
@@ -85,6 +120,18 @@ public class LangChain4jConfig {
     }
 
     /**
+     * 通义千问 Reranker 模型（自定义实现）
+     */
+    @Bean
+    public ScoringModel scoringModel() {
+        log.info("初始化 ScoringModel (Reranker): {}", scoringModelName);
+        return DashScopeScoringModel.builder()
+                .apiKey(apiKey)
+                .modelName(scoringModelName)
+                .build();
+    }
+
+    /**
      * PGVector 向量存储
      */
     @Bean
@@ -101,6 +148,39 @@ public class LangChain4jConfig {
                 .dimension(dimension)
                 .createTable(createTable)
                 .dropTableFirst(false)
+                .build();
+    }
+
+    /**
+     * Redis 聊天记忆存储（LangChain4j 官方实现）
+     */
+    @Bean
+    public ChatMemoryStore chatMemoryStore() {
+        log.info("初始化 RedisChatMemoryStore: {}:{}", redisHost, redisPort);
+        
+        // 创建 Jedis 连接池
+        JedisPooled jedisPooled;
+        if (redisPassword != null && !redisPassword.isEmpty()) {
+            jedisPooled = new JedisPooled(redisHost, redisPort, null, redisPassword);
+        } else {
+            jedisPooled = new JedisPooled(redisHost, redisPort);
+        }
+        
+        return RedisChatMemoryStore.builder()
+                .host(redisHost)
+                .port(redisPort)
+                .build();
+    }
+
+    /**
+     * ChatMemoryProvider（为每个会话创建独立的 ChatMemory）
+     */
+    @Bean
+    public ChatMemoryProvider chatMemoryProvider(ChatMemoryStore chatMemoryStore) {
+        return memoryId -> MessageWindowChatMemory.builder()
+                .id(memoryId)  // 会话 ID
+                .maxMessages(20)  // 最多保留 20 条消息
+                .chatMemoryStore(chatMemoryStore)  // 使用 Redis 存储
                 .build();
     }
 }

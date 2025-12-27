@@ -48,7 +48,7 @@ public class VectorMetadataUtilsV2 {
     /**
      * 从 TextSegment 获取元数据值
      */
-    public static Object getMetadata(TextSegment segment, String key) {
-        return segment.metadata(key);
+    public static String getMetadata(TextSegment segment, String key) {
+        return segment.metadata().getString(key);
     }
 }

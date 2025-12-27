@@ -20,7 +20,7 @@ spring:
       enabled: true
 
 server:
-  port: 8080
+  port: 8123
 
 # MyBatis-Plus配置
 mybatis-plus:

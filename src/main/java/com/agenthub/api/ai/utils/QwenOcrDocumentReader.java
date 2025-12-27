@@ -10,12 +10,12 @@ import com.alibaba.dashscope.common.Role;
 import com.alibaba.dashscope.exception.ApiException;
 import com.alibaba.dashscope.exception.NoApiKeyException;
 import com.alibaba.dashscope.exception.UploadFileException;
+import dev.langchain4j.data.document.Document;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.rendering.PDFRenderer;
-import org.springframework.ai.document.Document;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -31,9 +31,10 @@ import java.util.*;
 @Service
 @Slf4j
 @RequiredArgsConstructor
-public class QwenOcrDocumentReader implements MultiModalDocumentReader {
+public class QwenOcrDocumentReader{
 
-  @Value("${spring.ai.dashscope.api-key}")
+
+  @Value("${langchain4j.dashscope.api-key}")
   private String apiKey;
 
   // 统计总 token 消耗
@@ -41,7 +42,6 @@ public class QwenOcrDocumentReader implements MultiModalDocumentReader {
   private int totalOutputTokens = 0;
 
 
-  @Override
   public List<Document> read(InputStream inputStream, String filename) {
     List<Document> documents = new ArrayList<>();
     long startTime = System.currentTimeMillis();
@@ -91,9 +91,9 @@ public class QwenOcrDocumentReader implements MultiModalDocumentReader {
 
             if (ocrText != null && !ocrText.trim().isEmpty()) {
               Document doc = new Document(ocrText);
-              doc.getMetadata().put("ocr_source_file", filename);
-              doc.getMetadata().put("ocr_page_index", i + 1);
-              doc.getMetadata().put("ocr_model", "qwen-vl-plus");
+              doc.metadata().put("ocr_source_file", filename);
+              doc.metadata().put("ocr_page_index", i + 1);
+              doc.metadata().put("ocr_model", "qwen-vl-plus");
               documents.add(doc);
               log.info("第 {} 页 OCR 成功，提取文本长度: {} 字符", i + 1, ocrText.length());
             } else {

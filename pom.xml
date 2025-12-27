@@ -108,6 +108,18 @@
             <artifactId>langchain4j-embeddings</artifactId>
         </dependency>
 
+        <!-- LangChain4j Reactor (支持 Flux 流式输出) -->
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j-reactor</artifactId>
+        </dependency>
+
+        <!-- LangChain4j Redis (支持 Redis 聊天记忆存储) -->
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j-redis</artifactId>
+        </dependency>
+
         <!-- Tika 核心库 -->
         <dependency>
             <groupId>org.apache.tika</groupId>
@@ -161,6 +173,13 @@
             <groupId>com.alibaba</groupId>
             <artifactId>dashscope-sdk-java</artifactId>
             <version>2.16.7</version>
+        </dependency>
+
+        <!-- OkHttp (用于 DashScope Rerank HTTP API 调用) -->
+        <dependency>
+            <groupId>com.squareup.okhttp3</groupId>
+            <artifactId>okhttp</artifactId>
+            <version>4.12.0</version>
         </dependency>
 
         <!-- PostgreSQL + JDBC -->

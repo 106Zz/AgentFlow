@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS sys_user (
     create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     update_by VARCHAR(64) DEFAULT '',
     update_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    remark VARCHAR(500),
+    remark VARCHAR(2000),
     del_flag INT DEFAULT 0
     );
 
@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS chat_history (
     create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     update_by VARCHAR(64) DEFAULT '',
     update_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    remark VARCHAR(500),
+    remark VARCHAR(2000),
     del_flag INT DEFAULT 0
     );
 
@@ -78,7 +78,7 @@ CREATE TABLE IF NOT EXISTS knowledge_base (
     create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     update_by VARCHAR(64) DEFAULT '',
     update_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    remark VARCHAR(500),
+    remark VARCHAR(2000),
     del_flag INT DEFAULT 0
     );
 
@@ -130,14 +130,14 @@ CREATE INDEX IF NOT EXISTS idx_upload_log_knowledge_id ON file_upload_log(knowle
 -- =====================================================
 
 -- 插入默认管理员账号（密码：admin123）
-INSERT INTO sys_user (username, nickname, password, role, status)
-VALUES ('admin', '管理员', '$2a$10$7JB720yubVSZvUI0rEqK/.VqGOZTH.ulu33dHOiBE/TU.qj6wFKZy', 'admin', '0')
-    ON CONFLICT (username) DO NOTHING;
+INSERT INTO sys_user (user_id, username, nickname, password, role, status)
+VALUES (1, 'admin', '管理员', '$2a$10$5b8GChs8ZF2g.YHPio0JKOmEPkxrhSpevrf0YQJhrrB6mhLwjLvlC', 'admin', '0')
+ON CONFLICT (username) DO NOTHING;
 
 -- 插入测试用户（密码：user123）
-INSERT INTO sys_user (username, nickname, password, role, status)
-VALUES ('user', '测试用户', '$2a$10$RMuFXGQ5AtH4wOvkUqyvuecpqUSeoxZYqilXzbz50dceRsga.WYiq', 'user', '0')
-    ON CONFLICT (username) DO NOTHING;
+INSERT INTO sys_user (user_id, username, nickname, password, role, status)
+VALUES (2, 'user', '测试用户', '$2a$10$Qpz341znqPru6N0E9bjMLuPKWdkDQr5vRZjkTEFiUJqz9qeWTo.SO', 'user', '0')
+ON CONFLICT (username) DO NOTHING;
 
 -- =====================================================
 -- 表注释

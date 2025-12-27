@@ -1,6 +1,6 @@
 package com.agenthub.api.knowledge.controller;
 
-import com.agenthub.api.ai.service.impl.RagChatServiceImplV2;
+import com.agenthub.api.ai.service.impl.RagChatServiceImpl;
 import com.agenthub.api.common.base.BaseController;
 import com.agenthub.api.common.core.domain.AjaxResult;
 import com.agenthub.api.common.utils.SecurityUtils;
@@ -29,7 +29,7 @@ import java.util.UUID;
 public class ChatController extends BaseController {
 
     private final IChatService chatService;
-    private final RagChatServiceImplV2 ragChatService;
+    private final RagChatServiceImpl ragChatService;
     private final IChatHistoryService chatHistoryService;
 
     /**
@@ -71,6 +71,54 @@ public class ChatController extends BaseController {
                                                request.getQuestion(), fullAnswer.toString());
                 })
                 .delayElements(Duration.ofMillis(10));  // 控制输出速度（可选）
+    }
+
+    /**
+     * 流式问答（带思考模式，返回 JSON 格式）
+     * 前端可以区分思考内容和回答内容
+     */
+    @Operation(summary = "流式问答（思考模式）")
+    @PostMapping(value = "/stream-reasoning", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public Flux<String> streamWithReasoning(@Valid @RequestBody ChatRequest request) {
+        Long userId = SecurityUtils.getUserId();
+        
+        // 1. 生成或验证 sessionId
+        String sessionId = request.getSessionId();
+        if (sessionId == null || sessionId.isEmpty()) {
+            sessionId = UUID.randomUUID().toString();
+        }
+
+        final String finalSessionId = sessionId;
+        StringBuilder fullAnswer = new StringBuilder();
+        
+        // 2. 调用流式 RAG 服务，并包装为 JSON 格式
+        return ragChatService.chatStream(finalSessionId, request.getQuestion())
+                .map(chunk -> {
+                    fullAnswer.append(chunk);
+                    // 包装为 JSON 格式，前端可以解析
+                    // 格式: data: {"type":"answer","content":"文本片段"}\n\n
+                    return "data: {\"type\":\"answer\",\"content\":" + 
+                           escapeJson(chunk) + "}\n\n";
+                })
+                .concatWith(Flux.just("data: {\"type\":\"done\",\"sessionId\":\"" + 
+                                     finalSessionId + "\"}\n\n"))
+                .doOnComplete(() -> {
+                    // 保存完整的聊天历史
+                    chatHistoryService.saveChat(finalSessionId, userId, 
+                                               request.getQuestion(), fullAnswer.toString());
+                });
+    }
+    
+    /**
+     * JSON 字符串转义
+     */
+    private String escapeJson(String str) {
+        if (str == null) return "\"\"";
+        return "\"" + str.replace("\\", "\\\\")
+                         .replace("\"", "\\\"")
+                         .replace("\n", "\\n")
+                         .replace("\r", "\\r")
+                         .replace("\t", "\\t") + "\"";
     }
 
     /**
