@@ -2,6 +2,16 @@ spring:
   application:
     name: ai-agent
   
+  # Nacos配置导入（如果Nacos不可用，使用optional前缀避免启动失败）
+  config:
+    import: optional:nacos:ai-agent-local.yml
+  
+  # 排除不需要的自动配置（排除语音相关功能）
+  autoconfigure:
+    exclude:
+      - com.alibaba.cloud.ai.autoconfigure.dashscope.DashScopeAudioSpeechAutoConfiguration
+      - com.alibaba.cloud.ai.autoconfigure.dashscope.DashScopeAudioTranscriptionAutoConfiguration
+  
   # 数据源配置
   datasource:
     url: jdbc:postgresql://pgm-bp19f2e2n9u253thdo.rwlb.rds.aliyuncs.com:5432/Agent_Hub
@@ -59,6 +69,15 @@ spring:
         distance-type: COSINE_DISTANCE
         dimensions: 1536
         remove-existing-vector-store-table: false  # 不删除已有表
+
+# 阿里云OSS配置
+aliyun:
+  oss:
+    endpoint: oss-cn-hangzhou.aliyuncs.com  # 根据你的实际区域修改
+    accessKeyId: your-access-key-id          # 替换为你的AccessKeyId
+    accessKeySecret: your-access-key-secret  # 替换为你的AccessKeySecret
+    bucketName: your-bucket-name             # 替换为你的Bucket名称
+    urlPrefix: https://your-bucket-name.oss-cn-hangzhou.aliyuncs.com  # 可选，文件访问URL前缀
 
 # 应用配置
 app:
