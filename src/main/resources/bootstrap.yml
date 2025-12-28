@@ -11,3 +11,5 @@ spring:
         group: DEFAULT_GROUP
         file-extension: yml       # 配置文件格式
         refresh-enabled: true     # 启用热刷新（改 Nacos 配置后自动生效）
+        import-check:
+          enabled: false          # 禁用 Nacos 配置导入检查
