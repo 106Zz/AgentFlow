@@ -158,18 +158,13 @@ public class LangChain4jConfig {
     public ChatMemoryStore chatMemoryStore() {
         log.info("初始化 RedisChatMemoryStore: {}:{}", redisHost, redisPort);
         
-        // 创建 Jedis 连接池
-        JedisPooled jedisPooled;
+        // RedisChatMemoryStore 构造函数需要: host, port, user, password
+        // 对于单机 Redis，user 通常为 null
         if (redisPassword != null && !redisPassword.isEmpty()) {
-            jedisPooled = new JedisPooled(redisHost, redisPort, null, redisPassword);
+            return new RedisChatMemoryStore(redisHost, redisPort, null, redisPassword);
         } else {
-            jedisPooled = new JedisPooled(redisHost, redisPort);
+            return new RedisChatMemoryStore(redisHost, redisPort, null, null);
         }
-        
-        return RedisChatMemoryStore.builder()
-                .host(redisHost)
-                .port(redisPort)
-                .build();
     }
 
     /**

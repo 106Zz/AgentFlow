@@ -115,15 +115,26 @@ public class DashScopeScoringModel implements ScoringModel {
 
             // 填充实际的分数
             for (Map<String, Object> rerankResult : results) {
-                Integer index = (Integer) rerankResult.get("index");
+                Object indexObj = rerankResult.get("index");
                 Object scoreObj = rerankResult.get("relevance_score");
                 
+                // 处理 index（可能是 Integer 或 Double）
+                int index = -1;
+                if (indexObj instanceof Integer) {
+                    index = (Integer) indexObj;
+                } else if (indexObj instanceof Double) {
+                    index = ((Double) indexObj).intValue();
+                } else if (indexObj instanceof Number) {
+                    index = ((Number) indexObj).intValue();
+                }
+                
+                // 处理 score
                 double score = 0.0;
                 if (scoreObj instanceof Number) {
                     score = ((Number) scoreObj).doubleValue();
                 }
                 
-                if (index != null && index < scores.size()) {
+                if (index >= 0 && index < scores.size()) {
                     scores.set(index, score);
                 }
             }

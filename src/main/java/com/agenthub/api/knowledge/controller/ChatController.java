@@ -91,19 +91,22 @@ public class ChatController extends BaseController {
         final String finalSessionId = sessionId;
         StringBuilder fullAnswer = new StringBuilder();
         
-        // 2. 调用流式 RAG 服务，并包装为 JSON 格式
-        return ragChatService.chatStream(finalSessionId, request.getQuestion())
+        // 2. 调用带思考过程的流式 RAG 服务
+        return ragChatService.chatStreamWithThinking(finalSessionId, request.getQuestion())
                 .map(chunk -> {
-                    fullAnswer.append(chunk);
+                    // 只收集 answer 类型的内容
+                    if ("answer".equals(chunk.type)) {
+                        fullAnswer.append(chunk.content);
+                    }
                     // 包装为 JSON 格式，前端可以解析
-                    // 格式: data: {"type":"answer","content":"文本片段"}\n\n
-                    return "data: {\"type\":\"answer\",\"content\":" + 
-                           escapeJson(chunk) + "}\n\n";
+                    // 注意：Spring WebFlux 会自动添加 "data: " 前缀，所以这里不需要手动添加
+                    return "{\"type\":\"" + chunk.type + "\",\"content\":" + 
+                           escapeJson(chunk.content) + "}";
                 })
-                .concatWith(Flux.just("data: {\"type\":\"done\",\"sessionId\":\"" + 
-                                     finalSessionId + "\"}\n\n"))
+                .concatWith(Flux.just("{\"type\":\"done\",\"sessionId\":\"" + 
+                                     finalSessionId + "\"}"))
                 .doOnComplete(() -> {
-                    // 保存完整的聊天历史
+                    // 保存完整的聊天历史（只保存答案部分）
                     chatHistoryService.saveChat(finalSessionId, userId, 
                                                request.getQuestion(), fullAnswer.toString());
                 });
