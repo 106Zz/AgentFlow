@@ -10,6 +10,7 @@ import dev.langchain4j.model.output.Response;
 import dev.langchain4j.model.scoring.ScoringModel;
 import dev.langchain4j.rag.DefaultRetrievalAugmentor;
 import dev.langchain4j.rag.RetrievalAugmentor;
+import dev.langchain4j.rag.content.Content;
 import dev.langchain4j.rag.content.aggregator.ReRankingContentAggregator;
 import dev.langchain4j.rag.content.retriever.EmbeddingStoreContentRetriever;
 import dev.langchain4j.service.AiServices;
@@ -25,7 +26,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.Collectors;
 
 /**
  * RAG 聊天服务实现
@@ -55,13 +58,11 @@ public class RagChatServiceImpl {
 
     private static final String SYSTEM_PROMPT = """
         # 角色定位
-        你是一位面向企业客户的专业知识库分析师，能够基于知识库数据提供高质量、专业级的解答。
+        你是一位面向企业客户的专业知识库分析师，能够基于知识库数据提供高质量、专业级的解答。你的回答需要详细、准确、有深度。
         
         # 核心要求
+        
         1. 内容要求（最重要）
-           - 如果提供了参考文档，必须基于文档内容回答
-           - 如果没有提供参考文档，可以使用你的通用知识回答
-           - 基于文档回答时，严禁编造文档中不存在的信息
            - 提供详细、完整的分析
            - 包含所有相关数据和信息
            - 进行必要的推理和计算
@@ -70,19 +71,43 @@ public class RagChatServiceImpl {
         2. 格式要求（次要）
            - 使用自然段落，不使用 Markdown 格式符号
            - 用空行分隔段落
-           - 如果基于文档回答，用 [1] [2] 标记引用来源
+           - 用 [1] [2] 标记引用来源
         
-        # 输出结构（当有参考文档时）
+        # 输出结构
+        
         第一部分：参考文档
         📄 参考文档：
         [1] 完整文件名1.pdf
         [2] 完整文件名2.pdf
         
         第二部分：详细回答
-        用自然段落提供完整、详细的回答。
+        用自然段落提供完整、详细的回答。包括：
+        - 直接回答用户问题
+        - 提供相关的数据和事实
+        - 进行必要的分析和推理
+        - 说明数据来源和依据
+        - 给出明确的结论
         
-        # 输出结构（当没有参考文档时）
-        直接回答问题，使用你的通用知识。
+        # 格式规范
+        
+        允许使用：
+        - 自然段落（用空行分隔）
+        - 引用标记：[1] [2]
+        - 表情符号：📄 🌐
+        
+        不要使用：
+        - Markdown 标题（### 等）
+        - 粗体斜体（** * 等）
+        - 项目符号（- * 等）
+        - 数字列表（1. 2. 等）
+        
+        # 重要提示
+        
+        内容的完整性和准确性比格式更重要。请确保提供详细、有深度的回答，同时尽量使用自然段落而不是 Markdown 格式。
+        
+        如果知识库完全没有相关信息，在最终答案中写：抱歉，当前知识库暂未收录该内容。
+        
+        现在开始回答用户问题。
         """;
 
     /**
@@ -186,20 +211,20 @@ public class RagChatServiceImpl {
                 }
 
                 // 3. 手动 Reranking（使用 ScoringModel）
-                java.util.List<dev.langchain4j.rag.content.Content> finalContents = new java.util.ArrayList<>();
+                List<Content> finalContents = new ArrayList<>();
                 
                 if (!retrievedContents.isEmpty()) {
                     // 提取 TextSegment 用于 rerank
-                    java.util.List<dev.langchain4j.data.segment.TextSegment> segments = retrievedContents.stream()
+                    List<TextSegment> segments = retrievedContents.stream()
                             .map(content -> content.textSegment())
-                            .collect(java.util.stream.Collectors.toList());
+                            .collect(Collectors.toList());
                     
                     // 执行 rerank
                     Response<List<Double>> scoreResponse = scoringModel.scoreAll(segments, question);
-                    java.util.List<Double> scores = scoreResponse.content();
+                    List<Double> scores = scoreResponse.content();
                     
                     // 创建带分数的内容列表
-                    java.util.List<ContentWithScore> contentsWithScores = new java.util.ArrayList<>();
+                    List<ContentWithScore> contentsWithScores = new ArrayList<>();
                     for (int i = 0; i < retrievedContents.size() && i < scores.size(); i++) {
                         double score = scores.get(i);
                         if (score >= MIN_SCORE) {
