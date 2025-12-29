@@ -1,6 +1,6 @@
 spring:
   application:
-    name: ai-agent  # 必须和 Nacos Data ID 前半部分一致
+    name: agenthub  # 必须和 Nacos Data ID 前半部分一致
   profiles:
     active: local   # 本地仍用 local，生产部署时可覆盖为 prod
   cloud:
@@ -11,5 +11,14 @@ spring:
         group: DEFAULT_GROUP
         file-extension: yml       # 配置文件格式
         refresh-enabled: true     # 启用热刷新（改 Nacos 配置后自动生效）
+        # 添加连接超时和重试配置，提高容错性
+        timeout: 5000
+        max-retry: 5
+        retry-delay: 1000
+        enable-remote-sync-config: false
+        # 如果 Nacos 无法连接，允许应用继续启动
         import-check:
-          enabled: false          # 禁用 Nacos 配置导入检查
+          enabled: false
+      discovery:
+        server-addr: 124.70.190.134:8848  # 服务发现地址也配置为远程服务器
+        enabled: true  # 启用服务发现
