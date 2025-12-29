@@ -12,53 +12,74 @@ spring:
       - com.alibaba.cloud.ai.autoconfigure.dashscope.DashScopeAudioSpeechAutoConfiguration
       - com.alibaba.cloud.ai.autoconfigure.dashscope.DashScopeAudioTranscriptionAutoConfiguration
   
-  # 数据源配置
+  # 允许循环引用（解决Bean循环依赖问题）
+  main:
+    allow-circular-references: true
+  
+  cloud:
+    nacos:
+      config:
+        import-check:
+          enabled: false  # 禁用 Nacos 配置导入强制检查
+
+  # 数据源配置（已很好，无需改）
   datasource:
     url: jdbc:postgresql://pgm-bp19f2e2n9u253thdo.rwlb.rds.aliyuncs.com:5432/Agent_Hub
     username: zzzz
     password: 106Zz0106
     driver-class-name: org.postgresql.Driver
-    
-    # HikariCP 连接池配置
     hikari:
-      minimum-idle: 5                     # 最小空闲连接数
-      maximum-pool-size: 20               # 最大连接池大小
-      connection-timeout: 30000           # 连接超时时间（毫秒）
-      idle-timeout: 600000                # 空闲连接超时时间（10分钟）
-      max-lifetime: 1800000               # 连接最大存活时间（30分钟）
-      connection-test-query: SELECT 1     # 连接测试查询
-      pool-name: AgentHubHikariPool       # 连接池名称
-      initialization-fail-timeout: -1     # 初始化失败不阻止启动（开发阶段）
-  
-  # JPA配置
+      minimum-idle: 5
+      maximum-pool-size: 20
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+      connection-test-query: SELECT 1
+      pool-name: AgentHubHikariPool
+      initialization-fail-timeout: -1
+
+  # JPA配置（已很好）
   jpa:
     hibernate:
-      ddl-auto: update                    # 自动更新表结构
-    show-sql: false                       # 生产环境关闭SQL日志
+      ddl-auto: update
+    show-sql: false
     properties:
       hibernate:
         dialect: org.hibernate.dialect.PostgreSQLDialect
         format_sql: true
-  
-  # 文件上传配置
+
+  # 文件上传（已很好）
   servlet:
     multipart:
       max-file-size: 100MB
       max-request-size: 100MB
       enabled: true
+
+  # Redis 配置
+  data:
+    redis:
+      host: 124.70.190.134
+      port: 6379
+      password:                     # 如果有密码请填写
+      database: 0
+      timeout: 10000ms
+      client-type: lettuce
+      lettuce:
+        pool:
+          max-active: 20
+          max-idle: 10
+          min-idle: 5
+          max-wait: 2000ms
+        shutdown-timeout: 100ms
   
-  # AI配置
+  # Spring AI DashScope 配置
   ai:
     dashscope:
       api-key: sk-2bb62fd51dd646e89e8bffddb8aed7dd
       chat:
         options:
           model: deepseek-v3.2
-          enable-search: true
-          result-format: message
-          enable_thinking: true
-          stream: true
-          incremental_output: true
+          temperature: 0.7
       embedding:
         options:
           model: text-embedding-v3
@@ -68,21 +89,20 @@ spring:
         index-type: HNSW
         distance-type: COSINE_DISTANCE
         dimensions: 1536
-        remove-existing-vector-store-table: false  # 不删除已有表
+        remove-existing-vector-store-table: false
 
-# 阿里云OSS配置
-aliyun:
-  oss:
-    endpoint: oss-cn-hangzhou.aliyuncs.com  # 根据你的实际区域修改
-    accessKeyId: your-access-key-id          # 替换为你的AccessKeyId
-    accessKeySecret: your-access-key-secret  # 替换为你的AccessKeySecret
-    bucketName: your-bucket-name             # 替换为你的Bucket名称
-    urlPrefix: https://your-bucket-name.oss-cn-hangzhou.aliyuncs.com  # 可选，文件访问URL前缀
-
-# 应用配置
+# 应用自定义配置
 app:
   rag:
     preload:
       enabled: true
       paths:
         - "classpath:docs/company-rules/*.pdf"
+
+aliyun:
+  oss:
+    endpoint: oss-cn-shanghai.aliyuncs.com
+    accessKeyId: LTAI5t6kQLvYMEmHT6jgExW2  # 请填写你的实际 AccessKeyId
+    accessKeySecret: iPeKcVDOV6N2biyQFLzZK1lnSyFk0U  # 请填写你的实际 AccessKeySecret
+    bucketName: agenthub-knowledge
+    urlPrefix: ''
