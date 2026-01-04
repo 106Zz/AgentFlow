@@ -7,6 +7,8 @@ import com.agenthub.api.knowledge.domain.KnowledgeBase;
 import com.agenthub.api.knowledge.service.IKnowledgeBaseService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
@@ -21,12 +23,19 @@ import java.util.Map;
  */
 @Service
 @Slf4j
-@RequiredArgsConstructor
 public class DocumentProcessServiceImpl {
 
-    private final VectorStoreHelper vectorStoreHelper;
-    private final OssUtils ossUtils;
-    private final IKnowledgeBaseService knowledgeBaseService;
+    private  VectorStoreHelper vectorStoreHelper;
+    private  OssUtils ossUtils;
+
+    @Autowired
+    @Lazy
+    private IKnowledgeBaseService knowledgeBaseService;
+
+    public DocumentProcessServiceImpl(VectorStoreHelper vectorStoreHelper, OssUtils ossUtils) {
+        this.vectorStoreHelper = vectorStoreHelper;
+        this.ossUtils = ossUtils;
+    }
 
     /**
      * 异步处理知识库文档
