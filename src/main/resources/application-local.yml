@@ -1,6 +1,6 @@
 spring:
   application:
-    name: ai-agent
+#    name: ai-agent
   
   # Nacos配置导入（如果Nacos不可用，使用optional前缀避免启动失败）
   config:

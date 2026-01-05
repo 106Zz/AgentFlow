@@ -12,6 +12,7 @@ import org.springframework.ai.document.Document;
 import org.springframework.ai.transformer.splitter.TextSplitter;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.pgvector.PgVectorStore;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Component;
 import org.springframework.web.multipart.MultipartFile;
@@ -139,6 +140,9 @@ public class VectorStoreHelper {
 
     private final PgVectorStore vectorStore;
     private final QwenOcrDocumentReader ocrReader;
+
+    @Value("${ocr.trigger.min-length:30}")
+    private int ocrMinLength;
 
     private final Tika tika = new Tika();
 
@@ -300,7 +304,7 @@ public class VectorStoreHelper {
                     // 2. 智能判断：原生文本是否有效？
                     // 阈值设为 20-50 左右，视具体业务而定
                     // 如果存在乱码检测逻辑更好，这里仅用长度演示
-                    if (pageText.length() > 30) {
+                    if (pageText.length() > ocrMinLength) {
                         // A. 免费路径：原生文本
                         Document doc = new Document(pageText);
                         doc.getMetadata().put("page_index", i + 1);

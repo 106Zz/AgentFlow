@@ -8,79 +8,79 @@
 CREATE TABLE IF NOT EXISTS sys_user (
                                         user_id BIGINT PRIMARY KEY,
                                         username VARCHAR(30) NOT NULL UNIQUE,
-    nickname VARCHAR(30),
-    email VARCHAR(50),
-    phonenumber VARCHAR(11),
-    sex CHAR(1) DEFAULT '2',
-    avatar VARCHAR(255),
-    password VARCHAR(100) NOT NULL,
-    status CHAR(1) DEFAULT '0',
-    role VARCHAR(20) NOT NULL DEFAULT 'user',
-    create_by VARCHAR(64) DEFAULT '',
-    create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    update_by VARCHAR(64) DEFAULT '',
-    update_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    remark VARCHAR(500),
-    del_flag INT DEFAULT 0
-    );
+                                        nickname VARCHAR(30),
+                                        email VARCHAR(50),
+                                        phonenumber VARCHAR(11),
+                                        sex CHAR(1) DEFAULT '2',
+                                        avatar VARCHAR(255),
+                                        password VARCHAR(100) NOT NULL,
+                                        status CHAR(1) DEFAULT '0',
+                                        role VARCHAR(20) NOT NULL DEFAULT 'user',
+                                        create_by VARCHAR(64) DEFAULT '',
+                                        create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                                        update_by VARCHAR(64) DEFAULT '',
+                                        update_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                                        remark VARCHAR(2000),
+                                        del_flag INT DEFAULT 0
+);
 
 -- 聊天历史表（优化版，使用雪花算法生成ID）
 CREATE TABLE IF NOT EXISTS chat_history (
                                             id BIGINT PRIMARY KEY,
                                             session_id VARCHAR(64) NOT NULL,           -- 改为64（UUID长度）
-    user_id BIGINT NOT NULL,
-    question TEXT NOT NULL,
-    answer TEXT,
-    sources JSONB,                             -- 改为JSONB（更好的查询性能）
-    token_count INTEGER DEFAULT 0,             -- 新增：Token数量统计
-    question_type VARCHAR(50),
-    response_time BIGINT,
-    create_by VARCHAR(64) DEFAULT '',
-    create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    update_by VARCHAR(64) DEFAULT '',
-    update_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    remark VARCHAR(500),
-    del_flag INT DEFAULT 0
-    );
+                                            user_id BIGINT NOT NULL,
+                                            question TEXT NOT NULL,
+                                            answer TEXT,
+                                            sources JSONB,                             -- 改为JSONB（更好的查询性能）
+                                            token_count INTEGER DEFAULT 0,             -- 新增：Token数量统计
+                                            question_type VARCHAR(50),
+                                            response_time BIGINT,
+                                            create_by VARCHAR(64) DEFAULT '',
+                                            create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                                            update_by VARCHAR(64) DEFAULT '',
+                                            update_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                                            remark VARCHAR(2000),
+                                            del_flag INT DEFAULT 0
+);
 
 -- 会话元数据表（新增：用于管理会话列表，使用雪花算法生成ID）
 CREATE TABLE IF NOT EXISTS chat_session (
                                             id BIGINT PRIMARY KEY,
                                             session_id VARCHAR(64) NOT NULL UNIQUE,
-    user_id BIGINT NOT NULL,
-    title VARCHAR(200),                        -- 会话标题（首个问题的摘要）
-    message_count INTEGER DEFAULT 0,           -- 消息数量
-    last_message_time TIMESTAMP,               -- 最后一条消息时间
-    create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    update_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    del_flag INT DEFAULT 0
-    );
+                                            user_id BIGINT NOT NULL,
+                                            title VARCHAR(200),                        -- 会话标题（首个问题的摘要）
+                                            message_count INTEGER DEFAULT 0,           -- 消息数量
+                                            last_message_time TIMESTAMP,               -- 最后一条消息时间
+                                            create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                                            update_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                                            del_flag INT DEFAULT 0
+);
 
 -- 知识库元数据表（用于管理上传的文件信息，不存储向量，使用雪花算法生成ID）
 -- 向量数据由Spring AI自动管理在 vector_store 表中
 CREATE TABLE IF NOT EXISTS knowledge_base (
                                               id BIGINT PRIMARY KEY,
                                               title VARCHAR(255) NOT NULL,
-    file_name VARCHAR(255),
-    file_type VARCHAR(50),
-    file_path VARCHAR(500),
-    file_size BIGINT,
-    category VARCHAR(100),
-    tags VARCHAR(500),
-    content TEXT,
-    summary TEXT,
-    vector_status CHAR(1) DEFAULT '0',         -- 0未处理 1处理中 2已完成 3失败
-    vector_count INT DEFAULT 0,                -- 向量化后的文档块数量
-    user_id BIGINT DEFAULT 0,                  -- 0表示全局知识库，其他表示用户私有
-    is_public CHAR(1) DEFAULT '0',             -- 0私有 1公开
-    status CHAR(1) DEFAULT '0',
-    create_by VARCHAR(64) DEFAULT '',
-    create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    update_by VARCHAR(64) DEFAULT '',
-    update_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    remark VARCHAR(500),
-    del_flag INT DEFAULT 0
-    );
+                                              file_name VARCHAR(255),
+                                              file_type VARCHAR(50),
+                                              file_path VARCHAR(500),
+                                              file_size BIGINT,
+                                              category VARCHAR(100),
+                                              tags VARCHAR(500),
+                                              content TEXT,
+                                              summary TEXT,
+                                              vector_status CHAR(1) DEFAULT '0',         -- 0未处理 1处理中 2已完成 3失败
+                                              vector_count INT DEFAULT 0,                -- 向量化后的文档块数量
+                                              user_id BIGINT DEFAULT 0,                  -- 0表示全局知识库，其他表示用户私有
+                                              is_public CHAR(1) DEFAULT '0',             -- 0私有 1公开
+                                              status CHAR(1) DEFAULT '0',
+                                              create_by VARCHAR(64) DEFAULT '',
+                                              create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                                              update_by VARCHAR(64) DEFAULT '',
+                                              update_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                                              remark VARCHAR(2000),
+                                              del_flag INT DEFAULT 0
+);
 
 -- 文件上传记录表（可选，用于详细追踪，使用雪花算法生成ID）
 CREATE TABLE IF NOT EXISTS file_upload_log (
@@ -88,14 +88,14 @@ CREATE TABLE IF NOT EXISTS file_upload_log (
                                                knowledge_id BIGINT,                       -- 关联 knowledge_base 表
                                                user_id BIGINT NOT NULL,
                                                file_name VARCHAR(255) NOT NULL,
-    file_size BIGINT,
-    upload_status VARCHAR(20),                 -- uploading/success/failed
-    process_status VARCHAR(20),                -- pending/processing/completed/failed
-    error_message TEXT,
-    start_time TIMESTAMP,
-    end_time TIMESTAMP,
-    create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
+                                               file_size BIGINT,
+                                               upload_status VARCHAR(20),                 -- uploading/success/failed
+                                               process_status VARCHAR(20),                -- pending/processing/completed/failed
+                                               error_message TEXT,
+                                               start_time TIMESTAMP,
+                                               end_time TIMESTAMP,
+                                               create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 
 -- =====================================================
 -- 创建索引（优化查询性能）
@@ -130,14 +130,14 @@ CREATE INDEX IF NOT EXISTS idx_upload_log_knowledge_id ON file_upload_log(knowle
 -- =====================================================
 
 -- 插入默认管理员账号（密码：admin123）
-INSERT INTO sys_user (username, nickname, password, role, status)
-VALUES ('admin', '管理员', '$2a$10$7JB720yubVSZvUI0rEqK/.VqGOZTH.ulu33dHOiBE/TU.qj6wFKZy', 'admin', '0')
-    ON CONFLICT (username) DO NOTHING;
+INSERT INTO sys_user (user_id, username, nickname, password, role, status)
+VALUES (1, 'admin', '管理员', '$2a$10$5b8GChs8ZF2g.YHPio0JKOmEPkxrhSpevrf0YQJhrrB6mhLwjLvlC', 'admin', '0')
+ON CONFLICT (username) DO NOTHING;
 
 -- 插入测试用户（密码：user123）
-INSERT INTO sys_user (username, nickname, password, role, status)
-VALUES ('user', '测试用户', '$2a$10$RMuFXGQ5AtH4wOvkUqyvuecpqUSeoxZYqilXzbz50dceRsga.WYiq', 'user', '0')
-    ON CONFLICT (username) DO NOTHING;
+INSERT INTO sys_user (user_id, username, nickname, password, role, status)
+VALUES (2, 'user', '测试用户', '$2a$10$Qpz341znqPru6N0E9bjMLuPKWdkDQr5vRZjkTEFiUJqz9qeWTo.SO', 'user', '0')
+ON CONFLICT (username) DO NOTHING;
 
 -- =====================================================
 -- 表注释

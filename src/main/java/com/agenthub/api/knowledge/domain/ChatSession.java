@@ -1,12 +1,10 @@
 package com.agenthub.api.knowledge.domain;
 
-
-import com.agenthub.api.common.base.BaseEntity;
-import com.baomidou.mybatisplus.annotation.IdType;
-import com.baomidou.mybatisplus.annotation.TableId;
-import com.baomidou.mybatisplus.annotation.TableName;
+import com.baomidou.mybatisplus.annotation.*;
+import com.fasterxml.jackson.annotation.JsonFormat;
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
 import lombok.Data;
-import lombok.EqualsAndHashCode;
 
 import java.time.LocalDateTime;
 
@@ -14,9 +12,8 @@ import java.time.LocalDateTime;
  * 会话元数据对象 chat_session
  */
 @Data
-@EqualsAndHashCode(callSuper = true)
 @TableName("chat_session")
-public class ChatSession extends BaseEntity {
+public class ChatSession implements java.io.Serializable {
 
     private static final long serialVersionUID = 1L;
 
@@ -24,6 +21,7 @@ public class ChatSession extends BaseEntity {
      * 会话元数据ID（雪花算法生成）
      */
     @TableId(type = IdType.ASSIGN_ID)
+    @JsonSerialize(using = ToStringSerializer.class)
     private Long id;
 
     /**
@@ -34,6 +32,7 @@ public class ChatSession extends BaseEntity {
     /**
      * 用户ID
      */
+    @JsonSerialize(using = ToStringSerializer.class)
     private Long userId;
 
     /**
@@ -50,4 +49,24 @@ public class ChatSession extends BaseEntity {
      * 最后一条消息时间
      */
     private LocalDateTime lastMessageTime;
+
+    /**
+     * 创建时间
+     */
+    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
+    @TableField(fill = FieldFill.INSERT)
+    private LocalDateTime createTime;
+
+    /**
+     * 更新时间
+     */
+    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
+    @TableField(fill = FieldFill.INSERT_UPDATE)
+    private LocalDateTime updateTime;
+
+    /**
+     * 删除标志（0代表存在 1代表删除）
+     */
+    @TableLogic
+    private Integer delFlag;
 }

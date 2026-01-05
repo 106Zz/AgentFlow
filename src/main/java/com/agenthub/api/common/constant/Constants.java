@@ -12,7 +12,7 @@ public class Constants {
     public static final String LOGOUT = "Logout";
     public static final String LOGIN_FAIL = "Error";
     public static final Integer CAPTCHA_EXPIRATION = 2;
-    public static final String TOKEN = "token";
+    public static final String TOKEN = "Authorization";
     public static final String TOKEN_PREFIX = "Bearer ";
     public static final String LOGIN_USER_KEY = "login_user_key";
     public static final String JWT_USERID = "userid";
