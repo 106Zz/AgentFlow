@@ -14,7 +14,7 @@ public class VectorStoreConfig {
         return PgVectorStore.builder(jdbcTemplate, embeddingModel)
                 .indexType(PgVectorStore.PgIndexType.HNSW) // 默认使用 HNSW 索引
                 .distanceType(PgVectorStore.PgDistanceType.COSINE_DISTANCE) // 默认使用余弦距离
-                .dimensions(1536) // 默认维度，根据实际模型调整
+                .dimensions(1024) // 默认维度，根据实际模型调整
                 .removeExistingVectorStoreTable(false)
                 .initializeSchema(true)
                 .build();
