@@ -1,24 +1,17 @@
 spring:
   application:
-    name: agenthub  # 必须和 Nacos Data ID 前半部分一致
+    name: agenthub
   profiles:
-    active: local   # 本地仍用 local，生产部署时可覆盖为 prod
+    active: local
   cloud:
     nacos:
       config:
-        server-addr: 124.70.190.134:8848  # 你的 Nacos 服务器地址（本地开发用这个，生产改成服务器IP）
-        namespace: agentHub         # 如果用了命名空间，填 ID；默认 public 不填
+        server-addr: 124.70.190.134:8848
+        file-extension: yml
+        namespace: dd0bb0a4-aa7b-43af-b13a-748a9582d283
         group: DEFAULT_GROUP
-        file-extension: yml       # 配置文件格式
-        refresh-enabled: true     # 启用热刷新（改 Nacos 配置后自动生效）
-        # 添加连接超时和重试配置，提高容错性
-        timeout: 5000
-        max-retry: 5
-        retry-delay: 1000
-        enable-remote-sync-config: false
-        # 如果 Nacos 无法连接，允许应用继续启动
-        import-check:
-          enabled: false
+        refresh-enabled: true
+        timeout: 10000 # Increased timeout
       discovery:
-        server-addr: 124.70.190.134:8848  # 服务发现地址也配置为远程服务器
-        enabled: true  # 启用服务发现
+        server-addr: 124.70.190.134:8848
+        fail-fast: false # Disable fail-fast

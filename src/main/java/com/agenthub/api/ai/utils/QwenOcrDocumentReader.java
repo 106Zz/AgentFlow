@@ -36,6 +36,9 @@ public class QwenOcrDocumentReader implements MultiModalDocumentReader {
   @Value("${spring.ai.dashscope.api-key}")
   private String apiKey;
 
+  @Value("${spring.ai.dashscope.ocr.model:qwen-vl-plus}")
+  private String ocrModel;
+
   // 统计总 token 消耗
   private int totalInputTokens = 0;
   private int totalOutputTokens = 0;
@@ -93,7 +96,7 @@ public class QwenOcrDocumentReader implements MultiModalDocumentReader {
               Document doc = new Document(ocrText);
               doc.getMetadata().put("ocr_source_file", filename);
               doc.getMetadata().put("ocr_page_index", i + 1);
-              doc.getMetadata().put("ocr_model", "qwen-vl-plus");
+              doc.getMetadata().put("ocr_model", ocrModel);
               documents.add(doc);
               log.info("第 {} 页 OCR 成功，提取文本长度: {} 字符", i + 1, ocrText.length());
             } else {
@@ -139,7 +142,7 @@ public class QwenOcrDocumentReader implements MultiModalDocumentReader {
       // 构造请求参数
       MultiModalConversationParam param = MultiModalConversationParam.builder()
               .apiKey(apiKey)
-              .model("qwen-vl-plus")
+              .model(ocrModel)
               .message(userMessage)
               .topP(0.1)
               .build();

@@ -40,7 +40,11 @@ public class RerankerQuestionAnswerAdvisor implements CallAdvisor, StreamAdvisor
   public ChatClientResponse adviseCall(ChatClientRequest chatClientRequest, CallAdvisorChain callAdvisorChain) {
     //1.获取用户问题
     Prompt prompt = chatClientRequest.prompt();
-    UserMessage userMessage = prompt.getUserMessage();
+    UserMessage userMessage = prompt.getInstructions().stream()
+            .filter(m -> m instanceof UserMessage)
+            .map(m -> (UserMessage) m)
+            .findFirst()
+            .orElseThrow(() -> new IllegalArgumentException("No UserMessage found in prompt"));
     String userText = userMessage.getText();
 
     log.info("【Reranker Advisor】开始处理问题: {}", userText);
@@ -86,7 +90,11 @@ public class RerankerQuestionAnswerAdvisor implements CallAdvisor, StreamAdvisor
   public Flux<ChatClientResponse> adviseStream(ChatClientRequest chatClientRequest, StreamAdvisorChain streamAdvisorChain) {
     // 流式处理逻辑与 adviseCall 相同
     Prompt prompt = chatClientRequest.prompt();
-    UserMessage userMessage = prompt.getUserMessage();
+    UserMessage userMessage = prompt.getInstructions().stream()
+            .filter(m -> m instanceof UserMessage)
+            .map(m -> (UserMessage) m)
+            .findFirst()
+            .orElseThrow(() -> new IllegalArgumentException("No UserMessage found in prompt"));
     String userText = userMessage.getText();
 
     log.info("【Reranker Advisor Stream】开始处理问题: {}", userText);

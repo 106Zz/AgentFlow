@@ -66,8 +66,11 @@ public class SecurityConfig {
                         .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
                 )
                 .authorizeHttpRequests(auth -> auth
+                        // 允许异步分发（SSE/Stream 需要）
+                        .dispatcherTypeMatchers(jakarta.servlet.DispatcherType.ASYNC).permitAll()
                         .requestMatchers("/auth/login", "/auth/register").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/", "/*.html", "/**/*.html", "/**/*.css", "/**/*.js", "/profile/**").permitAll()
+                        .requestMatchers("/error").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/", "/index.html", "/profile/**").permitAll()
                         .requestMatchers("/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs/**", "/doc.html", "/webjars/**").permitAll()
                         .anyRequest().authenticated()
                 )

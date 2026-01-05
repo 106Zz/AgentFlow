@@ -1,6 +1,11 @@
 spring:
+  application:
+    name: agenthub
   profiles:
-    active: local  # 激活 application-local.yml 配置
+    active: local
+  main:
+    allow-bean-definition-overriding: true
+
   
   # JPA配置
   jpa:

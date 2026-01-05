@@ -28,9 +28,9 @@
     </scm>
     <properties>
         <java.version>21</java.version>
-        <spring-ai.version>1.0.0</spring-ai.version>
+        <spring-ai.version>1.1.0-M4</spring-ai.version>
         <jwt.version>0.12.6</jwt.version>
-        <spring-cloud-alibaba.version>2025.0.0.0</spring-cloud-alibaba.version>
+        <spring-cloud-alibaba.version>2023.0.1.0</spring-cloud-alibaba.version>
     </properties>
 
     <repositories>
@@ -39,23 +39,9 @@
             <name>Spring Milestones</name>
             <url>https://repo.spring.io/milestone</url>
             <releases>
-                <enabled>true</enabled>  <!-- 必须加这一行！ -->
-            </releases>
-            <snapshots>
-                <enabled>false</enabled> <!-- 可选，关闭 snapshots -->
-            </snapshots>
-        </repository>
-
-        <!-- 如果你以后想用 snapshot 版本，再加这个 -->
-        <!--
-        <repository>
-            <id>spring-snapshots</id>
-            <url>https://repo.spring.io/snapshot</url>
-            <snapshots>
                 <enabled>true</enabled>
-            </snapshots>
+            </releases>
         </repository>
-        -->
     </repositories>
 
     <dependencyManagement>
@@ -121,16 +107,11 @@
             <artifactId>spring-boot-starter-validation</artifactId>
         </dependency>
 
-        <!-- PGVector Starter -->
+        <!-- PGVector Store (Core) -->
         <dependency>
             <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-starter-vector-store-pgvector</artifactId>
-        </dependency>
-
-        <!-- RAG Advisors -->
-        <dependency>
-            <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-advisors-vector-store</artifactId>
+            <artifactId>spring-ai-pgvector-store</artifactId>
+            <version>${spring-ai.version}</version>
         </dependency>
 
         <!-- Tika 核心库 -->
@@ -185,7 +166,7 @@
         <dependency>
             <groupId>com.alibaba.cloud.ai</groupId>
             <artifactId>spring-ai-alibaba-starter-dashscope</artifactId>
-            <version>1.1.0.0-RC1</version>
+            <version>1.1.0.0-M5</version>
         </dependency>
 
         <!-- DashScope SDK -->
@@ -251,10 +232,6 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-redis</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-redis</artifactId>
         </dependency>
         <!-- Redis 连接池 -->
         <dependency>
