@@ -84,12 +84,15 @@ public class OssUtils {
             // 构建返回结果
             Map<String, String> result = new HashMap<>();
             result.put("accessKeyId", accessKeyId);
+            result.put("OSSAccessKeyId", accessKeyId); // 兼容标准字段名
             result.put("policy", encodedPolicy);
             result.put("signature", postSignature);
+            result.put("Signature", postSignature); // 兼容标准字段名
             result.put("dir", dir);
             result.put("host", getOssHost());
             result.put("expire", String.valueOf(expireEndTime / 1000));
             result.put("key", objectName); // 建议的完整文件路径
+            result.put("success_action_status", "200"); // 默认返回200状态码
             
             log.info("生成OSS上传凭证成功，目录: {}, 文件: {}", dir, objectName);
             

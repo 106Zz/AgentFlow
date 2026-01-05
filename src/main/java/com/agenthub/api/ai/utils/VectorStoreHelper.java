@@ -366,8 +366,8 @@ public class VectorStoreHelper {
             String text = chunk.getText();
 
             // ===== 核心：用户隔离元数据 =====
-            chunk.getMetadata().put("knowledge_id", knowledgeId);
-            chunk.getMetadata().put("user_id", userId);
+            chunk.getMetadata().put("knowledge_id", String.valueOf(knowledgeId));
+            chunk.getMetadata().put("user_id", String.valueOf(userId));
             chunk.getMetadata().put("is_public", isPublic);
             
             // 文件基本信息
@@ -431,7 +431,7 @@ public class VectorStoreHelper {
                 SearchRequest.builder()
                         .query("delete-placeholder-anything")
                         .topK(9999)
-                        .filterExpression("knowledge_id == %d".formatted(knowledgeId))
+                        .filterExpression("knowledge_id == '%s'".formatted(knowledgeId.toString()))
                         .build()
         );
 
@@ -456,8 +456,8 @@ public class VectorStoreHelper {
         if (!isAdmin) {
             // 普通用户：只能看到全局公开的 + 自己的
             filterExpression = String.format(
-                    "(user_id == 0 && is_public == '1') || user_id == %d",
-                    userId
+                    "(user_id == '0' && is_public == '1') || user_id == '%s'",
+                    userId.toString()
             );
         }
         // 管理员：不加过滤，可以看所有

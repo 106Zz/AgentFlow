@@ -36,15 +36,23 @@ public class ChatHistoryServiceImpl extends ServiceImpl<ChatHistoryMapper, ChatH
      */
     @Override
     public void saveChat(String sessionId, Long userId, String question, String answer) {
-        ChatHistory history = new ChatHistory();
-        history.setSessionId(sessionId);
-        history.setUserId(userId);
-        history.setQuestion(question);
-        history.setAnswer(answer);
-        
-        save(history);
-        
-        log.debug("聊天记录已保存：sessionId={}, userId={}", sessionId, userId);
+        try {
+            ChatHistory history = new ChatHistory();
+            history.setSessionId(sessionId);
+            history.setUserId(userId);
+            history.setQuestion(question);
+            history.setAnswer(answer);
+            
+            boolean success = save(history);
+            if (success) {
+                log.info("聊天记录已保存：sessionId={}, userId={}, ID={}", sessionId, userId, history.getId());
+            } else {
+                log.error("聊天记录保存失败：sessionId={}, userId={}", sessionId, userId);
+            }
+        } catch (Exception e) {
+            log.error("保存聊天记录发生异常: sessionId={}", sessionId, e);
+            throw e; // 抛出异常以中断流程（如事务回滚）
+        }
     }
 
     /**

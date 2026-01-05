@@ -102,7 +102,9 @@ public class ChatController extends BaseController {
     @GetMapping("/history/{sessionId}")
     public AjaxResult getHistory(@PathVariable String sessionId) {
         Long userId = SecurityUtils.getUserId();
-        return success(chatService.getChatHistory(sessionId, userId));
+        List<?> history = chatService.getChatHistory(sessionId, userId);
+        logger.info("获取聊天历史 - sessionId: {}, userId: {}, 记录数: {}", sessionId, userId, history.size());
+        return success(history);
     }
 
     /**
@@ -135,9 +137,8 @@ public class ChatController extends BaseController {
     @DeleteMapping("/history/{sessionId}")
     public AjaxResult clearHistory(@PathVariable String sessionId) {
         Long userId = SecurityUtils.getUserId();
-        // 同时删除历史记录和会话元数据
+        // 同时删除历史记录和会话元数据（已在 Service 层开启事务）
         boolean success = chatService.clearChatHistory(sessionId, userId);
-        chatSessionService.deleteSession(sessionId, userId);
         return success ? success("会话已删除") : error("删除失败");
     }
 }

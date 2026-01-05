@@ -78,7 +78,7 @@ CREATE TABLE IF NOT EXISTS knowledge_base (
                                               create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                                               update_by VARCHAR(64) DEFAULT '',
                                               update_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                                              remark VARCHAR(2000),
+                                              remark VARCHAR(5000),
                                               del_flag INT DEFAULT 0
 );
 

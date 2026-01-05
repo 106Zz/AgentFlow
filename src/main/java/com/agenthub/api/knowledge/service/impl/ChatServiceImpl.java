@@ -7,10 +7,12 @@ import com.agenthub.api.knowledge.domain.vo.ChatRequest;
 import com.agenthub.api.knowledge.domain.vo.ChatResponse;
 import com.agenthub.api.knowledge.service.IChatHistoryService;
 import com.agenthub.api.knowledge.service.IChatService;
+import com.agenthub.api.knowledge.service.IChatSessionService;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.UUID;
@@ -25,6 +27,7 @@ public class ChatServiceImpl implements IChatService {
 
     private final RagChatServiceImpl ragChatService;
     private final IChatHistoryService chatHistoryService;
+    private final IChatSessionService chatSessionService;
 
     @Override
     public ChatResponse chat(ChatRequest request) {
@@ -48,8 +51,11 @@ public class ChatServiceImpl implements IChatService {
         
         // 3. 保存到 PostgreSQL（用于前端展示历史）
         chatHistoryService.saveChat(sessionId, userId, request.getQuestion(), answer);
+
+        // 4. 更新会话列表状态（确保非流式对话也能在列表中显示）
+        chatSessionService.updateSession(sessionId, userId, request.getQuestion());
         
-        // 4. 构建响应
+        // 5. 构建响应
         long responseTime = System.currentTimeMillis() - startTime;
         
         ChatResponse response = new ChatResponse();
@@ -67,9 +73,13 @@ public class ChatServiceImpl implements IChatService {
         return chatHistoryService.getBySessionId(sessionId, userId);
     }
 
+    @Transactional(rollbackFor = Exception.class)
     @Override
     public boolean clearChatHistory(String sessionId, Long userId) {
+        // 1. 删除聊天历史
         chatHistoryService.deleteBySessionId(sessionId, userId);
+        // 2. 删除会话元数据
+        chatSessionService.deleteSession(sessionId, userId);
         return true;
     }
 
