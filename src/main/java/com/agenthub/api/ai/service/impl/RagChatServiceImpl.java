@@ -2,6 +2,7 @@ package com.agenthub.api.ai.service.impl;
 
 import com.agenthub.api.ai.advisor.RerankerQuestionAnswerAdvisor;
 import com.agenthub.api.ai.config.DashScopeRerankerConfig;
+import com.agenthub.api.ai.tool.knowledge.PowerKnowledgeTool;
 import com.agenthub.api.common.utils.SecurityUtils;
 import com.agenthub.api.knowledge.domain.vo.StreamChunk;
 import lombok.RequiredArgsConstructor;
@@ -11,6 +12,7 @@ import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
 import org.springframework.ai.chat.client.advisor.SimpleLoggerAdvisor;
 import org.springframework.ai.chat.memory.ChatMemoryRepository;
 import org.springframework.ai.chat.memory.MessageWindowChatMemory;
+import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.beans.factory.annotation.Value;
@@ -18,6 +20,7 @@ import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * RAG聊天服务实现
@@ -29,9 +32,10 @@ import java.util.Map;
 public class RagChatServiceImpl {
 
     private final ChatModel chatModel;
-    private final VectorStore vectorStore;
     private final ChatMemoryRepository chatMemoryRepository;
-    private final DashScopeRerankerConfig rerankerService;
+
+
+    private final PowerKnowledgeTool powerKnowledgeTool;
 
     @Value("${spring.ai.dashscope.api-key}")
     private String apiKey;
@@ -57,17 +61,8 @@ public class RagChatServiceImpl {
         
         return ChatClient.builder(chatModel)
                 .defaultSystem(systemPromptResource)
+                .defaultTools(powerKnowledgeTool)
                 .defaultAdvisors(
-                        // RAG 检索 + Reranker（带用户权限过滤）
-                        new RerankerQuestionAnswerAdvisor(
-                                vectorStore,
-                                rerankerService,
-                                20,  // 优化：召回 20 个候选（原 50 个太慢）
-                                5,   // Rerank 后保留 5 个
-                                0.5, // 相似度阈值
-                                filterExpression  // 动态过滤表达式
-                        ),
-                        
                         // 对话记忆（基于sessionId）
                         MessageChatMemoryAdvisor.builder(
                                 MessageWindowChatMemory.builder()
@@ -116,13 +111,13 @@ public class RagChatServiceImpl {
 
 
     /**
-     * 流式回复（模仿 Demo 逻辑：提取思考过程并封装为 StreamChunk）
+     * 流式回复
      */
     public Flux<StreamChunk> chatStream(String sessionId, String question) {
         ChatClient client = createUserChatClient(sessionId);
         
         // 用于原子更新 Token 使用情况
-        java.util.concurrent.atomic.AtomicReference<org.springframework.ai.chat.metadata.Usage> usageRef = new java.util.concurrent.atomic.AtomicReference<>();
+        AtomicReference<Usage> usageRef = new AtomicReference<>();
 
         return client.prompt()
                 .user(question)
@@ -140,9 +135,7 @@ public class RagChatServiceImpl {
                     if (resp.getResult() != null && resp.getResult().getOutput() != null) {
                         Map<String, Object> meta = resp.getResult().getOutput().getMetadata();
                         if (meta != null) {
-                            // DeepSeek 的 key 通常是 "reasoning_content" 或 "reasoning"
                             Object t = meta.get("reasoning_content");
-                            // 如果没找到，尝试找 "reasoning"
                             if (t == null) t = meta.get("reasoning");
                             
                             if (t != null && !t.toString().isEmpty()) {
@@ -156,9 +149,6 @@ public class RagChatServiceImpl {
                     if (resp.getResult() != null && resp.getResult().getOutput() != null) {
                         answerPart = resp.getResult().getOutput().getText();
                     }
-
-                    // 注意：流式输出中不要使用 cleanMarkdown，因为它会破坏被切断的 Markdown 标记（如 **加粗 会变成 **加粗）
-                    // 前端通常有 Markdown 渲染组件处理
 
                     return new StreamChunk(reasoningPart, answerPart,sessionId);
                 })
@@ -179,24 +169,5 @@ public class RagChatServiceImpl {
                     // 6. 优雅降级：向前端发送错误提示，而不是直接中断流
                     return Flux.just(new StreamChunk(null, "\n\n> [系统提示] 生成过程中发生错误: " + e.getMessage(), sessionId));
                 });
-    }
-
-    /**
-     * 辅助方法：清理 Markdown 格式（根据你的 Demo 需求）
-     */
-    private String cleanMarkdown(String text) {
-        if (text == null) return text;
-        // 移除 Markdown 标题
-        text = text.replaceAll("(?m)^#{1,6}\\s+", "");
-        // 移除粗体
-        text = text.replaceAll("\\*\\*(.+?)\\*\\*", "$1");
-        text = text.replaceAll("__(.+?)__", "$1");
-        // 移除斜体
-        text = text.replaceAll("(?<!\\*)\\*(?!\\*)(.+?)(?<!\\*)\\*(?!\\*)", "$1");
-        // 移除项目符号开头
-        text = text.replaceAll("(?m)^[\\-\\*\\+]\\s+", "");
-        // 移除数字列表开头
-        text = text.replaceAll("(?m)^\\d+\\.\\s+", "");
-        return text;
     }
 }
