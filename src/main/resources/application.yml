@@ -6,7 +6,6 @@ spring:
   main:
     allow-bean-definition-overriding: true
 
-  
   # JPA配置
   jpa:
     hibernate:
