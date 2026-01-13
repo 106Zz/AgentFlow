@@ -2,6 +2,7 @@ package com.agenthub.api.ai.service.impl;
 
 import com.agenthub.api.ai.advisor.RerankerQuestionAnswerAdvisor;
 import com.agenthub.api.ai.config.DashScopeRerankerConfig;
+import com.agenthub.api.ai.tool.Compliance.ComplianceCheckTool;
 import com.agenthub.api.ai.tool.knowledge.PowerKnowledgeTool;
 import com.agenthub.api.common.utils.SecurityUtils;
 import com.agenthub.api.knowledge.domain.vo.StreamChunk;
@@ -36,9 +37,7 @@ public class RagChatServiceImpl {
 
 
     private final PowerKnowledgeTool powerKnowledgeTool;
-
-    @Value("${spring.ai.dashscope.api-key}")
-    private String apiKey;
+    private final ComplianceCheckTool complianceCheckTool;
 
     @Value("classpath:/prompts/rag-system-prompt.st")
     private org.springframework.core.io.Resource systemPromptResource;
@@ -61,7 +60,7 @@ public class RagChatServiceImpl {
         
         return ChatClient.builder(chatModel)
                 .defaultSystem(systemPromptResource)
-                .defaultTools(powerKnowledgeTool)
+                .defaultTools(powerKnowledgeTool,complianceCheckTool)
                 .defaultAdvisors(
                         // 对话记忆（基于sessionId）
                         MessageChatMemoryAdvisor.builder(
