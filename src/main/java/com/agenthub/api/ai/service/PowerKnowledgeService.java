@@ -33,13 +33,13 @@ public class PowerKnowledgeService {
         @Value("${aliyun.oss.endpoint:https://oss-cn-shanghai.aliyuncs.com}")
         private String ossEndpoint;
 
-        @Value("${aliyun.oss.access-key}")
+        @Value("${aliyun.oss.accessKeyId}")
         private String accessKeyId;
 
-        @Value("${aliyun.oss.secret-key}")
+        @Value("${aliyun.oss.accessKeySecret}")
         private String accessKeySecret;
 
-        @Value("${aliyun.oss.bucket-name:agenthub-knowledge}")
+        @Value("${aliyun.oss.bucketName:agenthub-knowledge}")
         private String bucketName;
 
 
