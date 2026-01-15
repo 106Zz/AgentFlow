@@ -61,7 +61,8 @@ public class PowerKnowledgeService {
                         userId,
                         isAdmin,
                         recallCount,
-                        0.45
+                        0.45,
+                        query.category()
                 );
                 log.debug("初排召回 {} 条文档", rawDocs.size());
 
