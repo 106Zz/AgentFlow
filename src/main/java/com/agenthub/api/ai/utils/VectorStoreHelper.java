@@ -258,6 +258,11 @@ public class VectorStoreHelper {
             }
             
             chunk.getMetadata().put("filename", filename != null ? filename : "unknown");
+            String category = inferCategoryFromFilename(filename);
+            chunk.getMetadata().put("category", category);
+            if (i == 0) {
+                log.info("文件 [{}] 被自动归类为: [{}]", filename, category);
+            }
             chunk.getMetadata().put("fileSize", fileSize);
             chunk.getMetadata().put("uploadTime", now.toEpochMilli());
             chunk.getMetadata().put("chunkIndex", i);
@@ -346,35 +351,107 @@ public class VectorStoreHelper {
         }
     }
 
+//    /**
+//     * 根据用户权限搜索向量（带数据隔离）
+//     */
+//    public List<Document> searchWithUserFilter(String query, Long userId, boolean isAdmin,
+//                                               int topK, double threshold) {
+//        String filterExpression;
+//
+//        if (!isAdmin) {
+//            filterExpression = String.format(
+//                    "(user_id == '0' && is_public == '1') || user_id == '%s'",
+//                    userId.toString()
+//            );
+//        } else {
+//            filterExpression = null; // Admin 查所有
+//        }
+//
+//        try {
+//            return vectorStore.similaritySearch(
+//                    SearchRequest.builder()
+//                            .query(query)
+//                            .topK(topK)
+//                            .similarityThreshold(threshold)
+//                            .filterExpression(filterExpression)
+//                            .build()
+//            );
+//        } catch (IllegalArgumentException e) {
+//            log.error("检索向量时遇到脏数据（Metadata为Null），已跳过错误。Query: {}", query, e);
+//            return new ArrayList<>(); // 降级返回空列表，防止整个 RAG 挂掉
+//        }
+//    }
+
     /**
-     * 根据用户权限搜索向量（带数据隔离）
+     * 根据用户权限搜索向量（带数据隔离 + 类别过滤）
+     * [v4.0 Upgrade] 新增 category 参数
      */
     public List<Document> searchWithUserFilter(String query, Long userId, boolean isAdmin,
-                                               int topK, double threshold) {
-        String filterExpression;
+                                               int topK, double threshold, String category) {
+        String filterExpression = "";
 
+        // 1. 构建基础权限过滤 (Permission Filter)
         if (!isAdmin) {
             filterExpression = String.format(
                     "(user_id == '0' && is_public == '1') || user_id == '%s'",
                     userId.toString()
             );
-        } else {
-            filterExpression = null; // Admin 查所有
+        }
+
+        // 2. 叠加类别过滤 (Category Filter)
+        if (category != null && !category.isBlank()) {
+            String categoryFilter = String.format("category == '%s'", category);
+
+            if (filterExpression.isEmpty()) {
+                filterExpression = categoryFilter;
+            } else {
+                // 如果已有权限过滤，则用 AND 拼接: (权限逻辑) && category == 'xxx'
+                filterExpression = String.format("(%s) && %s", filterExpression, categoryFilter);
+            }
         }
 
         try {
-            return vectorStore.similaritySearch(
-                    SearchRequest.builder()
-                            .query(query)
-                            .topK(topK)
-                            .similarityThreshold(threshold)
-                            .filterExpression(filterExpression)
-                            .build()
-            );
+            var builder = SearchRequest.builder()
+                    .query(query)
+                    .topK(topK)
+                    .similarityThreshold(threshold);
+
+            // 只有当表达式不为空时才设置 filter
+            if (!filterExpression.isEmpty()) {
+                builder.filterExpression(filterExpression);
+            }
+
+            return vectorStore.similaritySearch(builder.build());
+
         } catch (IllegalArgumentException e) {
             log.error("检索向量时遇到脏数据（Metadata为Null），已跳过错误。Query: {}", query, e);
-            return new ArrayList<>(); // 降级返回空列表，防止整个 RAG 挂掉
+            return new ArrayList<>();
         }
+    }
+
+
+    private String inferCategoryFromFilename(String filename) {
+        if (filename == null) return "REGULATION"; // 默认兜底
+        String name = filename.toLowerCase();
+
+        // 1. 第一优先级：商务/价格 (钱是最敏感的，涉及结算公式和电价)
+        if (name.contains("结算") || name.contains("价格") || name.contains("电价") ||
+                name.contains("费用") || name.contains("补偿") || name.contains("合约") ||
+                name.contains("零售")) {
+            return "BUSINESS";
+        }
+
+        // 2. 第二优先级：技术/运行 (涉及具体物理参数、设备、曲线)
+        if (name.contains("技术") || name.contains("参数") || name.contains("标准") ||
+                name.contains("接入") || name.contains("负荷") || name.contains("曲线") ||
+                name.contains("储能") || name.contains("虚拟电厂") || name.contains("光伏") ||
+                name.contains("新能源") || name.contains("调频")) {
+            return "TECHNICAL";
+        }
+
+        // 3. 第三优先级：规则/合规 (兜底，涉及管理办法、考核、信用)
+        // 包含：规则、细则(非结算类)、办法、通知、指引、监管、评价
+        return "REGULATION";
     }
 
 }
