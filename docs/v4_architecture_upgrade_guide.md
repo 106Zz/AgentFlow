@@ -120,7 +120,7 @@ public class ComplianceSkills {
 
 #### Step 3.1: 定义 Worker (逻辑角色)
 
-* **文件**: `com.agenthub.api.ai.worker.ComplianceWorker.java`
+* **文件**: `com.agenthub.api.ai.worker.CalculationWorker.java`
 * **逻辑**: Worker 负责调用 Skill 并处理异常/重试。
 ```java
 @Service
