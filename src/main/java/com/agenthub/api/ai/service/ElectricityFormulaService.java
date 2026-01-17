@@ -1,7 +1,7 @@
 package com.agenthub.api.ai.service;
 
-import com.agenthub.api.ai.tool.calculator.DeviationInput;
-import com.agenthub.api.ai.tool.calculator.DeviationResult;
+import com.agenthub.api.ai.domain.calculator.DeviationInput;
+import com.agenthub.api.ai.domain.calculator.DeviationResult;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;

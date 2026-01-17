@@ -1,8 +1,6 @@
-package com.agenthub.api.ai.tool.knowledge;
+package com.agenthub.api.ai.domain.knowledge;
 
 import com.fasterxml.jackson.annotation.*;
-
-import java.util.List;
 
 @JsonClassDescription("电力行业知识库查询请求")
 public record PowerKnowledgeQuery(

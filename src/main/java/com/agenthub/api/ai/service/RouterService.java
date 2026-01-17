@@ -1,0 +1,71 @@
+package com.agenthub.api.ai.service;
+
+import com.agenthub.api.ai.core.AIRequest;
+import com.agenthub.api.ai.core.AIResponse;
+import com.agenthub.api.ai.core.AIUseCase;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.stereotype.Service;
+
+import java.util.List;
+
+/**
+ * 智能路由服务 (Router Service)
+ * 职责: 作为 AI 系统的"前台"，识别用户意图，并分发给对应的"专工"(UseCase)。
+ * 
+ * 架构说明: 
+ * 采用策略模式 (Strategy Pattern)，通过 List<AIUseCase> 自动发现所有能力。
+ * Router 本身不包含任何业务逻辑，只负责分发。
+ */
+@Slf4j
+@Service
+@RequiredArgsConstructor
+public class RouterService {
+
+    private final ChatClient chatClient;
+
+    // Spring 会自动注入所有实现了 AIUseCase 接口的 Bean (AuditUseCase, CalcUseCase, ChatUseCase)
+    private final List<AIUseCase> useCases;
+
+    public AIResponse handleRequest(AIRequest request) {
+        // 1. 识别意图 (Intent Classification)
+        // 只有当有文档上传时，才可能是 AUDIT；否则只可能是 CALC 或 CHAT
+        // 我们在 Prompt 里加入这个逻辑，帮助 AI 更准
+        String intentRaw = chatClient.prompt()
+                .system("""
+                        你是一个电力业务智能分发员。请根据用户输入和上下文判断意图，仅返回以下关键词之一：
+
+                        1. AUDIT (合规审查):
+                           - 用户明确要求对"合同"、"标书"、"文档"进行"审查"、"检查"、"核对"。
+                           - 只有当用户提供了文档内容时，才优先考虑此意图。
+
+                        2. CALC (偏差计算):
+                           - 用户提供了具体的电量数据（如"计划100，实际90"）。
+                           - 用户询问"考核费用"、"偏差电量"、"分摊金额"等计算问题。
+
+                        3. CHAT (知识问答/闲聊):
+                           - 用户询问电力市场规则、定义、知识（如"什么是偏差考核？"）。
+                           - 用户进行日常闲聊。
+                           - 如果无法确定是 AUDIT 或 CALC，默认返回 CHAT。
+
+                        请直接返回大写关键词，不要包含任何标点符号。
+                        """)
+                .user(u -> u.text("用户输入: {query}\n是否有附带文档: {hasDoc}")
+                        .param("query", request.query())
+                        .param("hasDoc", (request.docContent() != null && !request.docContent().isEmpty()) ? "是" : "否")
+                )
+                .call()
+                .content();
+
+        String intent = (intentRaw != null) ? intentRaw.trim().toUpperCase().replaceAll("[^A-Z]", "") : "CHAT";
+        log.info(">>>> [Router] 意图识别结果: {} (原始: {})", intent, intentRaw);
+
+        // 2. 策略分发 (Strategy Dispatch)
+        return useCases.stream()
+                .filter(u -> u.support(intent))
+                .findFirst()
+                .orElseThrow(() -> new RuntimeException("No UseCase found for intent: " + intent))
+                .execute(request);
+    }
+}

@@ -1,7 +1,6 @@
-package com.agenthub.api.ai.worker;
+package com.agenthub.api.ai.domain.worker;
 
 
-import javax.xml.transform.Source;
 import java.util.List;
 
 public record CommercialAuditResult(

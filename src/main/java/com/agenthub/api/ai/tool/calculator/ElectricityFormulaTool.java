@@ -1,5 +1,7 @@
 package com.agenthub.api.ai.tool.calculator;
 
+import com.agenthub.api.ai.domain.calculator.DeviationInput;
+import com.agenthub.api.ai.domain.calculator.DeviationResult;
 import com.agenthub.api.ai.service.ElectricityFormulaService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;

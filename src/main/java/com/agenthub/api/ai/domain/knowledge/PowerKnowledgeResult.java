@@ -1,4 +1,4 @@
-package com.agenthub.api.ai.tool.knowledge;
+package com.agenthub.api.ai.domain.knowledge;
 
 
 import java.util.List;

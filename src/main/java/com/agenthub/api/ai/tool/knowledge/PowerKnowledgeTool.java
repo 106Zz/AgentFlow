@@ -1,6 +1,8 @@
 package com.agenthub.api.ai.tool.knowledge;
 
 
+import com.agenthub.api.ai.domain.knowledge.PowerKnowledgeQuery;
+import com.agenthub.api.ai.domain.knowledge.PowerKnowledgeResult;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.tool.annotation.Tool;
