@@ -76,7 +76,7 @@ public class AsyncConfig {
      * 场景：专门用于 CommercialWorker 并行调用 Skill，以及等待 LLM 响应
      * 特点：IO 密集型任务，核心线程数可以设大一点，因为它们大部分时间在"等待"而不是"计算"
      */
-    @Bean(name="agentWorkerExcutor")
+    @Bean(name="agentWorkerExecutor")
     public ThreadPoolTaskExecutor agentWorkerExecutor(){
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
 

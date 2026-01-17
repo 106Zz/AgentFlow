@@ -24,17 +24,23 @@ import java.util.regex.Pattern;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class CalculationWorker {
 
     private final ElectricityFormulaTool formulaTool;
     private final PowerKnowledgeTool knowledgeTool;
-
-    // 2. 注入认知技能 (中间层能力)
     private final ComplianceSkills complianceSkills;
-
-    @Qualifier("agentWorkerExecutor")
     private final Executor executor;
+
+    public CalculationWorker(ElectricityFormulaTool formulaTool,
+                             PowerKnowledgeTool knowledgeTool,
+                             ComplianceSkills complianceSkills,
+                             @Qualifier("agentWorkerExecutor") Executor agentWorkerExecutor) {
+        this.formulaTool = formulaTool;
+        this.knowledgeTool = knowledgeTool;
+        this.complianceSkills = complianceSkills;
+        this.executor = agentWorkerExecutor;
+    }
+
 
     /**
      * 执行偏差考核审查流程
