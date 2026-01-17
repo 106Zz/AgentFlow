@@ -15,14 +15,16 @@ import java.util.stream.Collectors;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class CommercialWorker {
 
     private final CommercialSkills commercialSkills;
-
-    // 精准注入我们刚才定义的线程池
-    @Qualifier("agentWorkerExecutor")
     private final Executor executor;
+
+    public CommercialWorker(CommercialSkills commercialSkills,
+                            @Qualifier("agentWorkerExecutor") Executor agentWorkerExecutor) {
+        this.commercialSkills = commercialSkills;
+        this.executor = agentWorkerExecutor;
+    }
 
 
     /**
