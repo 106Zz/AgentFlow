@@ -226,7 +226,7 @@ public class ComplianceWorker {
     * @param userQuery 用户输入的自然语言，如 "计划500，实际480..."
     * @return 合规审查报告 (含证据链)
     */
-   public ComplianceReport executeReview(String userQuery) {
+   public CalculationReport executeReview(String userQuery) {
       log.info(">>>> [Worker] 开始执行合规审查, query: {}", userQuery);
 
       String targetYear = complianceSkills.extractYearContext(userQuery);
@@ -286,7 +286,7 @@ public class ComplianceWorker {
       // ----------------------------------------------------------
       // Step 4: 报告 (Report) - 组装证据链
       // ----------------------------------------------------------
-      return new ComplianceReport(
+      return new CalculationReport(
               calcResult.isExempt(),  // 对应 boolean isPassed
               calcResult.formulaUsed(),   // 对应 String conclusion (这里面包含了计算公式和金额)
               evidenceFilenames       // 对应 List<String> sources (如果不清洗，类型就不匹配)
