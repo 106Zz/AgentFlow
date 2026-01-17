@@ -1,4 +1,4 @@
-package com.agenthub.api.ai.tool.calculator;
+package com.agenthub.api.ai.domain.calculator;
 
 
 public record DeviationResult(

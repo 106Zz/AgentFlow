@@ -1,6 +1,8 @@
 package com.agenthub.api.ai.worker;
 
 import com.agenthub.api.ai.service.skill.CommercialSkills;
+import com.agenthub.api.ai.domain.workflow.WorkerResult;
+import com.agenthub.api.ai.domain.workflow.WorkerResult.WorkerType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -23,36 +25,39 @@ public class CommercialWorker {
     private final Executor executor;
 
 
-    public List<CommercialAuditResult> executeCommercialAudit(String contractContent) {
+    /**
+     * 并行执行商务审查
+     */
+    public CompletableFuture<List<WorkerResult>> executeCommercialAudit(String contractContent) {
         log.info(">>>> [Worker] 开始并行审核商务条款...");
 
-        // 1. 定义审查清单 (确定性骨架)
         List<String> auditItems = List.of("投标保证金", "履约保证金", "付款周期", "价格条款合法性");
 
-        // 2. 提交异步任务
-        List<CompletableFuture<CommercialAuditResult>> futures = auditItems.stream()
+        // 扇出 (Fan-Out)
+        List<CompletableFuture<WorkerResult>> futures = auditItems.stream()
                 .map(item -> CompletableFuture.supplyAsync(() -> {
-                            // 异步执行 Skill
+                            // ✅ 现在这里直接返回 WorkerResult，类型完美匹配！
                             return commercialSkills.auditCommercialTerm(item, contractContent);
-                        }, executor) // 指定线程池，不占用主线程
+                        }, executor)
                         .exceptionally(ex -> {
-                            // 3. 异常兜底 (Resilience)
-                            // 如果某一项查失败了（比如超时），返回一个默认的"未知"结果，而不是抛出异常中断流程
-                            log.error("审查项 [{}] 失败: {}", item, ex.getMessage());
-                            return new CommercialAuditResult(
+                            // 异常兜底
+                            log.error("Skill 执行失败: {}", ex.getMessage());
+                            return new WorkerResult(
                                     item,
+                                    WorkerType.COMMERCIAL,
                                     false,
-                                    "审查服务暂时不可用: " + ex.getMessage(),
-                                    "无",
+                                    "AI服务暂时不可用: " + ex.getMessage(),
+                                    "请稍后重试",
                                     List.of()
                             );
                         }))
                 .toList();
 
-        // 4. 阻塞等待所有结果汇聚 (Join)
-        return futures.stream()
-                .map(CompletableFuture::join)
-                .collect(Collectors.toList());
+        // 扇入 (Fan-In)
+        return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+                .thenApply(v -> futures.stream()
+                        .map(CompletableFuture::join)
+                        .collect(Collectors.toList()));
     }
 
 

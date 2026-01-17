@@ -1,8 +1,8 @@
 package com.agenthub.api.ai.service;
 
 import com.agenthub.api.ai.config.DashScopeRerankerConfig;
-import com.agenthub.api.ai.tool.knowledge.PowerKnowledgeQuery;
-import com.agenthub.api.ai.tool.knowledge.PowerKnowledgeResult;
+import com.agenthub.api.ai.domain.knowledge.PowerKnowledgeQuery;
+import com.agenthub.api.ai.domain.knowledge.PowerKnowledgeResult;
 import com.agenthub.api.ai.utils.VectorStoreHelper;
 import com.agenthub.api.common.utils.SecurityUtils;
 import com.aliyun.oss.OSS;

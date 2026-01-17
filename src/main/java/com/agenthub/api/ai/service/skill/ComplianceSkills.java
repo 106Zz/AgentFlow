@@ -1,14 +1,9 @@
 package com.agenthub.api.ai.service.skill;
 
 
-import com.agenthub.api.ai.tool.calculator.DeviationInput;
-import com.agenthub.api.ai.tool.knowledge.PowerKnowledgeTool;
-import lombok.RequiredArgsConstructor;
+import com.agenthub.api.ai.domain.calculator.DeviationInput;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.model.ChatModel;
-import org.springframework.ai.chat.prompt.Prompt;
-import org.springframework.ai.converter.BeanOutputConverter;
 import org.springframework.stereotype.Service;
 
 /**

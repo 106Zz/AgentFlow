@@ -1,9 +1,9 @@
 package com.agenthub.api.ai.service.skill;
 
 import com.agenthub.api.ai.service.PowerKnowledgeService;
-import com.agenthub.api.ai.tool.knowledge.PowerKnowledgeQuery;
-import com.agenthub.api.ai.worker.CommercialAuditResult;
-import lombok.RequiredArgsConstructor;
+import com.agenthub.api.ai.domain.knowledge.PowerKnowledgeQuery;
+import com.agenthub.api.ai.domain.worker.CommercialAuditResult;
+import com.agenthub.api.ai.domain.workflow.WorkerResult;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.stereotype.Service;
@@ -27,57 +27,59 @@ public class CommercialSkills {
     }
 
     /**
-     * 智能路由版技能：虽然方法只有一个，但内部有"千人千面"的 Prompt 策略
+     * 执行单项商务审查
+     * 注意：这里返回的是同步的 WorkerResult，异步由 Worker 层控制
      */
-    public CommercialAuditResult auditCommercialTerm(String itemName, String contractContent) {
+    public WorkerResult auditCommercialTerm(String itemName, String contractContent) {
 
-        // 1. 动态决定 Prompt 侧重点 (Prompt Engineering)
+        // 1. 动态决定 Prompt 策略
         String specificInstruction = switch (itemName) {
             case "投标保证金" -> "重点审查：1.金额是否超过估算价2%？ 2.是否有80万元上限限制？";
             case "付款周期" -> "重点审查：1.是否符合D+X日的结算规定？ 2.是否拖延支付？";
             case "价格条款" -> "重点审查：1.是否包含负电价机制？ 2.价格单位是否为 元/MWh？";
-            default -> "请严格对比参考资料，指出不合规之处。"; // 兜底通用策略
+            default -> "请严格对比参考资料，指出不合规之处。";
         };
 
-        // 2. 查据 (保持不变，利用 category=BUSINESS 物理隔离)
+        // 2. 查据 (RAG)
+        // 使用 CATEGORY=BUSINESS 锁定商务文档
         var knowledge = knowledgeService.retrieve(new PowerKnowledgeQuery(itemName + " 规定", 3, null, "BUSINESS"));
 
-        // 3. 执行 AI 调用
-        CommercialAuditResult llmResult = chatClient.prompt()
+        // 3. 执行 AI 调用 (解析为临时的 CommercialAuditResult)
+        // 这一步是为了利用 BeanOutputConverter 自动解析 JSON
+        CommercialAuditResult llmRawResult = chatClient.prompt()
                 .system(s -> s.text("""
                     你是一个电力商务合规专家。
                     任务：审查合同中的【{item}】条款。
                     
                     核心关注点：
-                    {instruction}  <-- 动态注入的专用策略
+                    {instruction}
                     
                     参考依据：
                     {rules}
                     """))
                 .user(u -> u.text("合同片段：\n{content}")
                         .param("item", itemName)
-                        .param("instruction", specificInstruction) // 注入策略
+                        .param("instruction", specificInstruction)
                         .param("rules", knowledge.answer())
                         .param("content", contractContent))
                 .call()
-                .entity(CommercialAuditResult.class);
+                .entity(CommercialAuditResult.class); // 临时对象
 
-        List<CommercialAuditResult.Source> realSources = (knowledge.sources() == null)
+        // 4. [关键一步] 适配器模式：将 RAG 证据转为标准格式
+        List<WorkerResult.SourceEvidence> evidences = (knowledge.sources() == null)
                 ? Collections.emptyList()
                 : knowledge.sources().stream()
-                .map(s -> new CommercialAuditResult.Source(
-                        s.filename(),     // 从 RAG 结果拿文件名
-                        s.downloadUrl()   // 从 RAG 结果拿 OSS 链接
-                ))
+                .map(s -> new WorkerResult.SourceEvidence(s.filename(), s.downloadUrl())) // ✅ 保留下载链接
                 .toList();
 
-        // 4. 证据回填 (Data Lineage)
-        return new CommercialAuditResult(
-                llmResult.item(),
-                llmResult.passed(),
-                llmResult.detail(),
-                llmResult.requirement(),
-                realSources
+        // 5. [关键一步] 结果封装：返回标准的 WorkerResult
+        return new WorkerResult(
+                itemName,                           // 检查项
+                WorkerResult.WorkerType.COMMERCIAL,              // 工种：商务
+                llmRawResult.passed(),              // 结论
+                llmRawResult.detail(),              // 风险详情
+                llmRawResult.requirement(),         // 建议/要求
+                evidences                           // 证据链
         );
     }
 
