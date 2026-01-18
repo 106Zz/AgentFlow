@@ -1,24 +1,14 @@
 package com.agenthub.api.ai.config;
 
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.memory.ChatMemoryRepository;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.data.redis.core.RedisTemplate;
 
 /**
  * ChatClient 配置
  */
 @Configuration
 public class ChatClientConfig {
-
-    /**
-     * 使用 Redis 作为对话记忆存储
-     */
-    @Bean
-    public ChatMemoryRepository chatMemoryRepository(RedisTemplate<String, Object> redisTemplate) {
-        return new com.agenthub.api.ai.config.RedisChatMemoryRepository(redisTemplate);
-    }
 
     /**
      * 提供一个全局通用的、基础的 ChatClient Bean。
