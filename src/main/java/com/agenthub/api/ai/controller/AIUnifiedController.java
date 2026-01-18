@@ -12,6 +12,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
+import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -43,7 +44,7 @@ public class AIUnifiedController extends BaseController {
     @PostMapping(value = "/chat", produces = {MediaType.APPLICATION_JSON_VALUE, MediaType.TEXT_EVENT_STREAM_VALUE})
     public Object chat(@RequestBody ChatRequestDTO requestDto) {
         Long userId = SecurityUtils.getUserId();
-        String sessionId = requestDto.sessionId() != null ? requestDto.sessionId() : UUID.randomUUID().toString();
+        String sessionId = StringUtils.hasText(requestDto.sessionId()) ? requestDto.sessionId() : UUID.randomUUID().toString();
 
         log.info("接收 AI 请求: user={}, session={}, query={}", userId, sessionId, requestDto.query());
 

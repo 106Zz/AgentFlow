@@ -24,6 +24,7 @@ import java.util.List;
 public class RouterService {
 
     private final ChatClient chatClient;
+    private final MemorySyncService memorySyncService;
 
     // Spring 会自动注入所有实现了 AIUseCase 接口的 Bean (AuditUseCase, CalcUseCase, ChatUseCase)
     private final List<AIUseCase> useCases;
@@ -62,10 +63,23 @@ public class RouterService {
         log.info(">>>> [Router] 意图识别结果: {} (原始: {})", intent, intentRaw);
 
         // 2. 策略分发 (Strategy Dispatch)
-        return useCases.stream()
+        AIResponse response = useCases.stream()
                 .filter(u -> u.support(intent))
                 .findFirst()
                 .orElseThrow(() -> new RuntimeException("No UseCase found for intent: " + intent))
                 .execute(request);
+
+        // 3. 记忆同步切面 (Aspect) - 将业务结果同步给 Chat 记忆
+        // 排除 STREAM (ChatUseCase 自己会存)
+        if (response.getType() != AIResponse.Type.STREAM && response.getAsyncData() != null) {
+            response.getAsyncData().whenComplete((result, ex) -> {
+                if (ex == null && result != null) {
+                    // 异步调用记忆同步服务
+                    memorySyncService.sync(request.sessionId(), request.query(), result);
+                }
+            });
+        }
+
+        return response;
     }
 }
