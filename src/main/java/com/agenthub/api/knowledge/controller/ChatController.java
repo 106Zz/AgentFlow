@@ -38,62 +38,62 @@ public class ChatController extends BaseController {
     private final IChatHistoryService chatHistoryService;
     private final com.agenthub.api.knowledge.service.IChatSessionService chatSessionService;
 
-    /**
-     * 普通问答（一次性返回完整答案）
-     */
-    @Operation(summary = "普通问答")
-    @PostMapping("/ask")
-    public AjaxResult ask(@Valid @RequestBody ChatRequest request) {
-        ChatResponse response = chatService.chat(request);
-        return success(response);
-    }
-
-
-    /**
-     * 流式问答（逐字返回，支持思考过程展示）
-     */
-    @Operation(summary = "流式问答")
-    @PostMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public Flux<StreamChunk> stream(@Valid @RequestBody ChatRequest request) {
-        Long userId = SecurityUtils.getUserId();
-        
-        // 1. 生成或验证 sessionId
-        String sessionId = request.getSessionId();
-        if (sessionId == null || sessionId.isEmpty()) {
-            sessionId = UUID.randomUUID().toString();
-        }
-
-        // 2. 调用流式 RAG 服务 (返回 StreamChunk)
-        Flux<StreamChunk> answerStream = ragChatService.chatStream(sessionId, request.getQuestion());
-
-        // 3. 收集完整答案并保存（异步）
-        final String finalSessionId = sessionId;
-        StringBuilder fullAnswer = new StringBuilder();
-        
-        return answerStream
-                .map(chunk -> {
-                    // 注入 SessionId，确保前端能拿到（尤其是新建会话时）
-                    chunk.setSessionId(finalSessionId);
-                    return chunk;
-                })
-                .doOnNext(chunk -> {
-                    // 只收集正文内容用于存储，忽略思考过程
-                    if (chunk.getContent() != null) {
-                        fullAnswer.append(chunk.getContent());
-                    }
-                })
-                .doOnComplete(() -> {
-                    // 流式输出完成后，保存完整的聊天历史
-                    String answer = fullAnswer.toString();
-                    if (!answer.isEmpty()) {
-                        // 1. 保存详细对话记录
-                        chatHistoryService.saveChat(finalSessionId, userId, 
-                                                   request.getQuestion(), answer);
-                        // 2. 更新会话状态（异步生成标题等）
-                        chatSessionService.updateSession(finalSessionId, userId, request.getQuestion());
-                    }
-                });
-    }
+//    /**
+//     * 普通问答（一次性返回完整答案）
+//     */
+//    @Operation(summary = "普通问答")
+//    @PostMapping("/ask")
+//    public AjaxResult ask(@Valid @RequestBody ChatRequest request) {
+//        ChatResponse response = chatService.chat(request);
+//        return success(response);
+//    }
+//
+//
+//    /**
+//     * 流式问答（逐字返回，支持思考过程展示）
+//     */
+//    @Operation(summary = "流式问答")
+//    @PostMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+//    public Flux<StreamChunk> stream(@Valid @RequestBody ChatRequest request) {
+//        Long userId = SecurityUtils.getUserId();
+//
+//        // 1. 生成或验证 sessionId
+//        String sessionId = request.getSessionId();
+//        if (sessionId == null || sessionId.isEmpty()) {
+//            sessionId = UUID.randomUUID().toString();
+//        }
+//
+//        // 2. 调用流式 RAG 服务 (返回 StreamChunk)
+//        Flux<StreamChunk> answerStream = ragChatService.chatStream(sessionId, request.getQuestion());
+//
+//        // 3. 收集完整答案并保存（异步）
+//        final String finalSessionId = sessionId;
+//        StringBuilder fullAnswer = new StringBuilder();
+//
+//        return answerStream
+//                .map(chunk -> {
+//                    // 注入 SessionId，确保前端能拿到（尤其是新建会话时）
+//                    chunk.setSessionId(finalSessionId);
+//                    return chunk;
+//                })
+//                .doOnNext(chunk -> {
+//                    // 只收集正文内容用于存储，忽略思考过程
+//                    if (chunk.getContent() != null) {
+//                        fullAnswer.append(chunk.getContent());
+//                    }
+//                })
+//                .doOnComplete(() -> {
+//                    // 流式输出完成后，保存完整的聊天历史
+//                    String answer = fullAnswer.toString();
+//                    if (!answer.isEmpty()) {
+//                        // 1. 保存详细对话记录
+//                        chatHistoryService.saveChat(finalSessionId, userId,
+//                                                   request.getQuestion(), answer);
+//                        // 2. 更新会话状态（异步生成标题等）
+//                        chatSessionService.updateSession(finalSessionId, userId, request.getQuestion());
+//                    }
+//                });
+//    }
 
     /**
      * 获取聊天历史

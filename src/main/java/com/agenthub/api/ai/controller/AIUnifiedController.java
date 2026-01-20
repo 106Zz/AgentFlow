@@ -7,6 +7,8 @@ import com.agenthub.api.ai.service.RouterService;
 import com.agenthub.api.common.base.BaseController;
 import com.agenthub.api.common.core.domain.AjaxResult;
 import com.agenthub.api.common.utils.SecurityUtils;
+import com.agenthub.api.knowledge.service.IChatHistoryService;
+import com.agenthub.api.knowledge.service.IChatSessionService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
@@ -34,6 +36,8 @@ import java.util.concurrent.CompletableFuture;
 public class AIUnifiedController extends BaseController {
 
     private final RouterService routerService;
+    private final IChatSessionService chatSessionService;
+    private final IChatHistoryService chatHistoryService;
 
     /**
      * 统一对话接口
@@ -60,13 +64,41 @@ public class AIUnifiedController extends BaseController {
         AIResponse response = routerService.handleRequest(aiRequest);
 
         // 3. 根据响应类型分发返回结果
+        // 保存会话信息（用于流式完成后持久化）
+        final String finalSessionId = sessionId;
+        final String finalQuery = requestDto.query();
+        final Long finalUserId = userId;
+
         return switch (response.getType()) {
             // 场景 A: 流式对话 (Chat) -> 返回 Flux<String> (SSE)
             case STREAM -> {
                 @SuppressWarnings("unchecked")
                 Flux<String> stream = (Flux<String>) response.getStreamData();
-                // 可以在这里添加 SSE 的 retry、id 等元数据，这里简单起见直接返回内容流
-                yield stream.map(text -> "data: " + text + "\n\n"); 
+
+                // 收集完整答案用于持久化
+                StringBuilder fullAnswer = new StringBuilder();
+
+                yield stream
+                        .doOnNext(chunk -> {
+                            // 收集响应内容
+                            fullAnswer.append(chunk);
+                        })
+                        .doOnComplete(() -> {
+                            // 流式输出完成后，保存完整的聊天历史
+                            String answer = fullAnswer.toString();
+                            if (!answer.isEmpty()) {
+                                try {
+                                    // 1. 保存详细对话记录到 chat_history 表
+                                    chatHistoryService.saveChat(finalSessionId, finalUserId, finalQuery, answer);
+                                    // 2. 更新会话状态到 chat_session 表（异步生成标题等）
+                                    chatSessionService.updateSession(finalSessionId, finalUserId, finalQuery);
+                                    log.info("会话保存成功: sessionId={}, userId={}", finalSessionId, finalUserId);
+                                } catch (Exception e) {
+                                    log.error("保存会话失败: sessionId={}, userId={}", finalSessionId, finalUserId, e);
+                                }
+                            }
+                        })
+                        .map(text -> "data: " + text + "\n\n");
             }
 
             // 场景 B: 结构化报告 (Audit) -> 异步等待结果 -> 返回标准 JSON
