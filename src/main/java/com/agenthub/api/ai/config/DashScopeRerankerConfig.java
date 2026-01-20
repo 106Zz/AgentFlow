@@ -7,7 +7,6 @@ import cn.hutool.json.JSONUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.document.Document;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -15,7 +14,8 @@ import java.util.stream.Collectors;
 
 @Service
 @Slf4j
-@Cacheable(value = "rerank", unless = "#result == null || #result.isEmpty()")
+// 移除类级别的 @Cacheable 注解
+// 原因：1) Document 对象序列化问题；2) 每次查询组合不同，缓存意义不大；3) 缓存占用内存大
 public class DashScopeRerankerConfig {
 
     @Value("${spring.ai.dashscope.api-key}")
