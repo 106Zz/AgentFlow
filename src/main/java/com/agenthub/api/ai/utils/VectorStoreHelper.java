@@ -1,5 +1,6 @@
 package com.agenthub.api.ai.utils;
 
+import com.agenthub.api.search.service.IBm25IndexService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.pdfbox.Loader;
@@ -13,7 +14,7 @@ import org.springframework.ai.transformer.splitter.TextSplitter;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.pgvector.PgVectorStore;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.core.io.InputStreamResource;
+import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Component;
 import org.springframework.web.multipart.MultipartFile;
@@ -25,30 +26,80 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.regex.Pattern;
-import java.util.function.BiConsumer;
 
 /**
- * 知识库文档处理核心工具类（已完成最强中文升级 + Metadata防御增强）
- * 当前版本解决了:
- * 1. TokenTextSplitter 切分不准确的问题
- * 2. 入库时 metadata 为 null 导致的查询/删除异常
+ * 知识库文档处理核心工具类
+ *
+ * <p>功能：</p>
+ * <ul>
+ *   <li>文档解析（PDF混合解析 / Tika通用解析）</li>
+ *   <li>中文智能分块</li>
+ *   <li>向量存储（PGVector）</li>
+ *   <li>BM25索引构建（异步）</li>
+ *   <li>向量删除</li>
+ *   <li>权限检索</li>
+ * </ul>
+ *
+ * <p>版本历史：</p>
+ * <ul>
+ *   <li>v1.0 - 基础文档解析和向量存储</li>
+ *   <li>v2.0 - 自定义中文分块器，支持chunk重叠</li>
+ *   <li>v3.0 - Metadata null值防御</li>
+ *   <li>v4.0 - 自生成UUID关联BM25索引</li>
+ *   <li>v4.1 - 集成BM25索引服务</li>
+ * </ul>
  */
 @Component
 @Slf4j
 @RequiredArgsConstructor
 public class VectorStoreHelper {
 
+    // ==================== 依赖注入 ====================
+
     private final PgVectorStore vectorStore;
     private final QwenOcrDocumentReader ocrReader;
+    private final IBm25IndexService bm25IndexService;
 
     @Value("${ocr.trigger.min-length:30}")
     private int ocrMinLength;
 
     private final Tika tika = new Tika();
 
+    // ==================== 常量定义 ====================
+
+    /** 向量存储批次大小 */
+    private static final int VECTOR_BATCH_SIZE = 10;
+
+    /** Chunk最小长度（字符） */
+    private static final int MIN_CHUNK_LENGTH = 50;
+
+    /** Chunk目标最小长度（字符） */
+    private static final int TARGET_CHUNK_LENGTH = 450;
+
+    /** Chunk目标最大长度（字符） */
+    private static final int MAX_CHUNK_LENGTH = 600;
+
+    /** Chunk重叠长度（字符） */
+    private static final int OVERLAP_LENGTH = 150;
+
+    /** 文档类别 */
+    private static final class Category {
+        private static final String BUSINESS = "BUSINESS";      // 商业/价格
+        private static final String TECHNICAL = "TECHNICAL";    // 技术/运行
+        private static final String REGULATION = "REGULATION";    // 规则/合规（默认）
+    }
+
+    // ==================== 中文分块器 ====================
+
     /**
      * 智能中文分块器
+     *
+     * <p>策略：按段落 → 句子 → 标点符号 → 空格 递归分割</p>
+     * <p>大小：450-600字符/块</p>
+     * <p>重叠：相邻块有150字符重叠</p>
      */
     private final TextSplitter chineseTextSplitter = new TextSplitter() {
 
@@ -70,13 +121,12 @@ public class VectorStoreHelper {
                 List<String> texts = splitText(doc.getText());
                 for (int i = 0; i < texts.size(); i++) {
                     Document chunk = new Document(texts.get(i));
-                    // 复制原始 metadata，但要小心 null 值
+                    // 复制原始 metadata（过滤null值）
                     doc.getMetadata().forEach((k, v) -> {
                         if (v != null) {
                             chunk.getMetadata().put(k, v);
                         }
                     });
-                    
                     chunk.getMetadata().put("chunkIndex", i);
                     chunk.getMetadata().put("totalChunks", texts.size());
                     allChunks.add(chunk);
@@ -102,10 +152,12 @@ public class VectorStoreHelper {
             StringBuilder current = new StringBuilder();
             for (int i = 0; i < parts.length; i++) {
                 String part = parts[i];
-                if (i > 0) part = sep + part;
+                if (i > 0) {
+                    part = sep + part;
+                }
 
-                if (current.length() + part.length() > 600) {
-                    if (current.length() > 100) {
+                if (current.length() + part.length() > MAX_CHUNK_LENGTH) {
+                    if (current.length() > MIN_CHUNK_LENGTH) {
                         chunks.add(current.toString().trim());
                     }
                     current.setLength(0);
@@ -113,16 +165,16 @@ public class VectorStoreHelper {
 
                 current.append(part);
 
-                if (current.length() >= 450 && i < parts.length - 1) {
+                if (current.length() >= TARGET_CHUNK_LENGTH && i < parts.length - 1) {
                     chunks.add(current.toString().trim());
-                    String overlap = current.length() > 150
-                            ? current.substring(current.length() - 150)
+                    String overlap = current.length() > OVERLAP_LENGTH
+                            ? current.substring(current.length() - OVERLAP_LENGTH)
                             : current.toString();
                     current = new StringBuilder(overlap);
                 }
             }
 
-            if (current.length() > 50) {
+            if (current.length() > MIN_CHUNK_LENGTH) {
                 chunks.add(current.toString().trim());
             }
         }
@@ -131,15 +183,26 @@ public class VectorStoreHelper {
             for (int i = 0; i < text.length(); i += 500) {
                 int end = Math.min(i + 600, text.length());
                 String chunk = text.substring(i, end).trim();
-                if (chunk.length() > 50) {
+                if (chunk.length() > MIN_CHUNK_LENGTH) {
                     chunks.add(chunk);
                 }
             }
         }
     };
 
-    // ========== 公共方法 1：用户上传（MultipartFile）==========
-    public int processAndStoreDocument(MultipartFile file, Long knowledgeId, Long userId, 
+    // ==================== 文档入库方法 ====================
+
+    /**
+     * 处理用户上传的文件
+     *
+     * @param file          上传的文件
+     * @param knowledgeId   知识库ID
+     * @param userId        用户ID
+     * @param isPublic      是否公开 ("0"=私有, "1"=公开)
+     * @param extraMetadata 额外的元数据
+     * @return 切片数量
+     */
+    public int processAndStoreDocument(MultipartFile file, Long knowledgeId, Long userId,
                                        String isPublic, Map<String, Object> extraMetadata)
             throws IOException {
         String filename = file.getOriginalFilename();
@@ -148,7 +211,16 @@ public class VectorStoreHelper {
         return processAndStore(fileBytes, filename, fileSize, knowledgeId, userId, isPublic, extraMetadata);
     }
 
-    // ========== 公共方法 2：系统预加载（Resource）==========
+    /**
+     * 处理系统预加载的文件
+     *
+     * @param resource      Spring Resource对象
+     * @param knowledgeId   知识库ID
+     * @param userId        用户ID
+     * @param isPublic      是否公开
+     * @param extraMetadata 额外的元数据
+     * @return 切片数量
+     */
     public int processAndStoreDocument(Resource resource, Long knowledgeId, Long userId,
                                        String isPublic, Map<String, Object> extraMetadata)
             throws IOException {
@@ -161,116 +233,151 @@ public class VectorStoreHelper {
         return processAndStore(fileBytes, filename, fileSize, knowledgeId, userId, isPublic, extraMetadata);
     }
 
-    // ========== 核心方法（统一处理）==========
+    /**
+     * 核心处理方法（统一入口）
+     *
+     * @param fileBytes      文件字节数组
+     * @param filename       文件名
+     * @param fileSize       文件大小
+     * @param knowledgeId    知识库ID
+     * @param userId         用户ID
+     * @param isPublic       是否公开
+     * @param extraMetadata  额外的元数据
+     * @return 切片数量
+     */
     public int processAndStore(byte[] fileBytes, String filename, long fileSize,
                                 Long knowledgeId, Long userId, String isPublic,
                                 Map<String, Object> extraMetadata) throws IOException {
 
-        log.info("【开始处理文档】{}（{}KB），用户ID： প্রশিক্ষ", filename, fileSize / 1024, userId);
+        log.info("【开始处理文档】{} ({}KB)，用户ID: {}", filename, fileSize / 1024, userId);
 
         List<Document> documents = new ArrayList<>();
 
-        // 1. 判断文件类型
+        // 1. 文件解析
         if (filename.toLowerCase().endsWith(".pdf")) {
-            // === PDF 混合解析逻辑 ===
-            try (PDDocument pdfDoc = Loader.loadPDF(fileBytes)) {
-                PDFRenderer renderer = new PDFRenderer(pdfDoc);
-                PDFTextStripper stripper = new PDFTextStripper();
-                stripper.setSortByPosition(true);
-
-                int totalPages = pdfDoc.getNumberOfPages();
-                log.info("PDF共 {} 页，开始页级混合解析...", totalPages);
-
-                for (int i = 0; i < totalPages; i++) {
-                    stripper.setStartPage(i + 1);
-                    stripper.setEndPage(i + 1);
-                    String pageText = stripper.getText(pdfDoc).trim();
-
-                    if (pageText.length() > ocrMinLength) {
-                        Document doc = new Document(pageText);
-                        doc.getMetadata().put("page_index", i + 1);
-                        doc.getMetadata().put("ocr_used", false);
-                        documents.add(doc);
-                    } else {
-                        log.info("第 {} 页：文本不足，启用 Qwen-VL OCR...", i + 1);
-                        BufferedImage image = renderer.renderImage(i, 2.0f);
-                        String ocrText = ocrReader.processSingleImage(image);
-
-                        if (ocrText != null && !ocrText.isEmpty()) {
-                            Document doc = new Document(ocrText);
-                            doc.getMetadata().put("page_index", i + 1);
-                            doc.getMetadata().put("ocr_used", true);
-                            documents.add(doc);
-                        }
-                    }
-                }
-            }
+            documents = parsePdf(fileBytes);
         } else {
-            // 非 PDF 文件
-            log.info("使用 Tika 解析非 PDF 文件： প্রশিক্ষ", filename);
-            String text = null;
-            try {
-                text = tika.parseToString(new ByteArrayInputStream(fileBytes));
-                if (!text.trim().isEmpty()) {
-                    documents.add(new Document(text));
-                }
-            } catch (TikaException e) {
-                throw new RuntimeException(e);
-            }
-            if (text.trim().isEmpty()) {
-                throw new IllegalArgumentException("Tika 解析后内容为空: " + filename);
-            }
-            documents.add(new Document(text));
+            documents = parseNonPdf(fileBytes, filename);
         }
 
         if (documents.isEmpty() || documents.get(0).getText().trim().isEmpty()) {
             throw new IllegalArgumentException("文档解析后内容为空: " + filename);
         }
 
-        // 3. 中文智能分块
+        // 2. 中文智能分块
         List<Document> chunks = chineseTextSplitter.split(documents);
-        log.info("【智能分块完成】总块数： প্রশিক্ষ", chunks.size());
+        log.info("【智能分块完成】总块数: {}", chunks.size());
 
-        // 4. 添加 metadata（核心修复：增加 null 值防御）
-        Instant now = Instant.now();
-        
-        // 定义一个安全的 put 方法
-        BiConsumer<Document, Map.Entry<String, Object>> safePut = (doc, entry) -> {
-            if (entry.getValue() != null) {
-                doc.getMetadata().put(entry.getKey(), entry.getValue());
+        // 3. 添加 Metadata（含 UUID 生成）
+        enrichMetadata(chunks, filename, fileSize, knowledgeId, userId, isPublic, extraMetadata);
+
+        // 4. 存储向量和构建索引
+        storeWithIndex(chunks, knowledgeId, userId);
+
+        return chunks.size();
+    }
+
+    /**
+     * 解析PDF文件（混合模式：文本提取 + OCR）
+     */
+    private List<Document> parsePdf(byte[] fileBytes) throws IOException {
+        List<Document> documents = new ArrayList<>();
+
+        try (PDDocument pdfDoc = Loader.loadPDF(fileBytes)) {
+            PDFRenderer renderer = new PDFRenderer(pdfDoc);
+            PDFTextStripper stripper = new PDFTextStripper();
+            stripper.setSortByPosition(true);
+
+            int totalPages = pdfDoc.getNumberOfPages();
+            log.info("PDF共 {} 页，开始页级混合解析...", totalPages);
+
+            for (int i = 0; i < totalPages; i++) {
+                stripper.setStartPage(i + 1);
+                stripper.setEndPage(i + 1);
+                String pageText = stripper.getText(pdfDoc).trim();
+
+                if (pageText.length() > ocrMinLength) {
+                    Document doc = new Document(pageText);
+                    doc.getMetadata().put("page_index", i + 1);
+                    doc.getMetadata().put("ocr_used", false);
+                    documents.add(doc);
+                } else {
+                    log.info("第 {} 页：文本不足，启用 Qwen-VL OCR...", i + 1);
+                    BufferedImage image = renderer.renderImage(i, 2.0f);
+                    String ocrText = ocrReader.processSingleImage(image);
+
+                    if (ocrText != null && !ocrText.isEmpty()) {
+                        Document doc = new Document(ocrText);
+                        doc.getMetadata().put("page_index", i + 1);
+                        doc.getMetadata().put("ocr_used", true);
+                        documents.add(doc);
+                    }
+                }
             }
-        };
+        }
+
+        return documents;
+    }
+
+    /**
+     * 解析非PDF文件（使用Tika）
+     */
+    private List<Document> parseNonPdf(byte[] fileBytes, String filename) throws IOException {
+        log.info("使用 Tika 解析非 PDF 文件: {}", filename);
+
+        String text;
+        try {
+            text = tika.parseToString(new ByteArrayInputStream(fileBytes));
+        } catch (TikaException e) {
+            throw new RuntimeException("Tika 解析失败: " + filename, e);
+        }
+
+        if (text.trim().isEmpty()) {
+            throw new IllegalArgumentException("Tika 解析后内容为空: " + filename);
+        }
+
+        return List.of(new Document(text));
+    }
+
+    /**
+     * 为chunk添加Metadata（包含UUID生成）
+     */
+    private void enrichMetadata(List<Document> chunks, String filename, long fileSize,
+                                Long knowledgeId, Long userId, String isPublic,
+                                Map<String, Object> extraMetadata) {
+        Instant now = Instant.now();
 
         for (int i = 0; i < chunks.size(); i++) {
             Document chunk = chunks.get(i);
             String text = chunk.getText();
 
-            // ===== 核心：用户隔离元数据 =====
-            // 这里强制转换 String 防止 Long 类型可能的 null 问题
-            chunk.getMetadata().put("knowledge_id", String.valueOf(knowledgeId)); 
+            // ===== 关键：自己生成UUID，用于关联BM25索引 =====
+            String vectorId = UUID.randomUUID().toString();
+            chunk.getMetadata().put("internal_id", vectorId);
+            // ===========================================
+
+            // 用户隔离元数据
+            chunk.getMetadata().put("knowledge_id", String.valueOf(knowledgeId));
             chunk.getMetadata().put("user_id", String.valueOf(userId));
-            
-            // 防御性添加 is_public
-            if (isPublic != null) {
-                chunk.getMetadata().put("is_public", isPublic);
-            } else {
-                chunk.getMetadata().put("is_public", "0"); // 默认私有
-            }
-            
+
+            // 公开标识
+            chunk.getMetadata().put("is_public", isPublic != null ? isPublic : "0");
+
+            // 文件信息
             chunk.getMetadata().put("filename", filename != null ? filename : "unknown");
-            String category = inferCategoryFromFilename(filename);
-            chunk.getMetadata().put("category", category);
-            if (i == 0) {
-                log.info("文件 [{}] 被自动归类为: [{}]", filename, category);
-            }
             chunk.getMetadata().put("fileSize", fileSize);
+            chunk.getMetadata().put("category", inferCategoryFromFilename(filename));
             chunk.getMetadata().put("uploadTime", now.toEpochMilli());
+
+            // Chunk信息
             chunk.getMetadata().put("chunkIndex", i);
             chunk.getMetadata().put("totalChunks", chunks.size());
 
+            // 内容预览
             String preview = text.length() > 100 ? text.substring(0, 100) + "..." : text;
             chunk.getMetadata().put("preview", preview);
 
+            // 额外元数据
             if (extraMetadata != null) {
                 extraMetadata.forEach((k, v) -> {
                     if (v != null) {
@@ -279,136 +386,105 @@ public class VectorStoreHelper {
                 });
             }
         }
+    }
 
-        // 5. 分批存储到向量库
-        int batchSize = 10;
-        for (int i = 0; i < chunks.size(); i += batchSize) {
-            int end = Math.min(i + batchSize, chunks.size());
+    /**
+     * 存储向量并异步构建BM25索引
+     */
+    private void storeWithIndex(List<Document> chunks, Long knowledgeId, Long userId) {
+        for (int i = 0; i < chunks.size(); i += VECTOR_BATCH_SIZE) {
+            int end = Math.min(i + VECTOR_BATCH_SIZE, chunks.size());
             List<Document> batch = chunks.subList(i, end);
+
+            // 存储向量
             vectorStore.add(batch);
+
+            // 异步构建BM25索引
+            for (Document doc : batch) {
+                String vectorId = (String) doc.getMetadata().get("internal_id");
+                String content = doc.getText();
+
+                CompletableFuture.runAsync(() -> {
+                    try {
+                        bm25IndexService.indexDocument(vectorId, content, knowledgeId, userId);
+                    } catch (Exception e) {
+                        log.error("【BM25索引】构建失败: {}", vectorId, e);
+                    }
+                });
+            }
+
             log.info("【写入向量库】已存储 {}-{} / {} 块", i + 1, end, chunks.size());
         }
-
-        return chunks.size();
     }
 
-
-        /**
-         * 根据 sessionId + filename 删除整个文档的所有向量块
-         */
-        public int deleteDocumentVectors(String sessionId, String filename) {
-            // ... (保持不变，或根据需要优化) ...
-            // 如果数据已清洗，这里的 similaritySearch 就不会报错了
-            try {
-                List<Document> matched = vectorStore.similaritySearch(
-                        SearchRequest.builder()
-                                .query("delete-placeholder-anything")
-                                .topK(9999)
-                                .filterExpression("sessionId == '%s' && filename == '%s'".formatted(sessionId, filename))
-                                .build()
-                );
-
-                if (matched.isEmpty()) return 0;
-
-                List<String> ids = matched.stream().map(Document::getId).toList();
-                vectorStore.delete(ids);
-                return ids.size();
-            } catch (IllegalArgumentException e) {
-                log.error("删除向量失败（Metadata包含Null），这通常是脏数据导致的。建议手动清理向量表。错误信息: {}", e.getMessage());
-                // 如果是因为 Metadata Null 导致查不出来，那也没法删，只能吞掉异常防止卡死业务流程
-                return 0;
-            }
-        }
+    // ==================== 删除方法 ====================
 
     /**
-     * 根据 knowledge_id 删除整个文档的所有向量块
+     * 根据知识库ID删除所有数据（向量 + BM25索引）
+     *
+     * @param knowledgeId 知识库ID
+     * @return 删除的记录数
      */
     public int deleteDocumentVectors(Long knowledgeId) {
-        try {
-            List<Document> matched = vectorStore.similaritySearch(
-                    SearchRequest.builder()
-                            .query("delete-placeholder-anything")
-                            .topK(9999)
-                            .filterExpression("knowledge_id == '%s'".formatted(knowledgeId.toString()))
-                            .build()
-            );
+        log.info("【删除向量】开始删除知识库 {} 的数据", knowledgeId);
 
-            if (matched.isEmpty()) {
-                log.warn("未找到需要删除的向量：knowledge_id={}", knowledgeId);
-                return 0;
-            }
+        // 1. 查询所有向量数据
+        List<Document> documents = vectorStore.similaritySearch(
+                SearchRequest.builder()
+                        .query("delete-placeholder")
+                        .topK(9999)
+                        .filterExpression("knowledge_id == '%s'".formatted(knowledgeId.toString()))
+                        .build()
+        );
 
-            List<String> ids = matched.stream().map(Document::getId).toList();
-            vectorStore.delete(ids);
-            log.info("【删除成功】已删除知识库 {} 的 {} 条向量记录", knowledgeId, ids.size());
-            return ids.size();
-            
-        } catch (IllegalArgumentException e) {
-            log.error("严重错误：删除向量时发现 Metadata 包含 Null 值，导致无法反序列化。knowledge_id={}。错误: {}", knowledgeId, e.getMessage());
-            // 这是一个棘手的情况：因为查都查不出来，怎么删 ID？
-            // 此时只能依赖外部手动清理，或者忽略错误继续
+        if (documents.isEmpty()) {
+            log.warn("【删除向量】未找到知识库 {} 的数据", knowledgeId);
             return 0;
         }
+
+        // 2. 提取ID列表
+        List<String> internalIds = documents.stream()
+                .map(d -> (String) d.getMetadata().get("internal_id"))
+                .toList();
+
+        List<String> vectorStoreIds = documents.stream()
+                .map(Document::getId)
+                .toList();
+
+        // 3. 删除BM25索引
+        for (String vectorId : internalIds) {
+            try {
+                bm25IndexService.deleteDocument(vectorId);
+            } catch (Exception e) {
+                log.warn("【BM25索引】删除失败: {}", vectorId, e);
+            }
+        }
+
+        // 4. 删除向量数据
+        if (!vectorStoreIds.isEmpty()) {
+            vectorStore.delete(vectorStoreIds);
+        }
+
+        log.info("【删除向量】完成，删除 {} 条记录", vectorStoreIds.size());
+        return vectorStoreIds.size();
     }
 
-//    /**
-//     * 根据用户权限搜索向量（带数据隔离）
-//     */
-//    public List<Document> searchWithUserFilter(String query, Long userId, boolean isAdmin,
-//                                               int topK, double threshold) {
-//        String filterExpression;
-//
-//        if (!isAdmin) {
-//            filterExpression = String.format(
-//                    "(user_id == '0' && is_public == '1') || user_id == '%s'",
-//                    userId.toString()
-//            );
-//        } else {
-//            filterExpression = null; // Admin 查所有
-//        }
-//
-//        try {
-//            return vectorStore.similaritySearch(
-//                    SearchRequest.builder()
-//                            .query(query)
-//                            .topK(topK)
-//                            .similarityThreshold(threshold)
-//                            .filterExpression(filterExpression)
-//                            .build()
-//            );
-//        } catch (IllegalArgumentException e) {
-//            log.error("检索向量时遇到脏数据（Metadata为Null），已跳过错误。Query: {}", query, e);
-//            return new ArrayList<>(); // 降级返回空列表，防止整个 RAG 挂掉
-//        }
-//    }
+    // ==================== 检索方法 ====================
 
     /**
-     * 根据用户权限搜索向量（带数据隔离 + 类别过滤）
-     * [v4.0 Upgrade] 新增 category 参数
+     * 根据用户权限搜索向量（支持类别过滤）
+     *
+     * @param query     查询文本
+     * @param userId    用户ID
+     * @param isAdmin   是否管理员
+     * @param topK      返回数量
+     * @param threshold 相似度阈值
+     * @param category  类别过滤（可选）
+     * @return 匹配的文档列表
      */
     public List<Document> searchWithUserFilter(String query, Long userId, boolean isAdmin,
                                                int topK, double threshold, String category) {
-        String filterExpression = "";
-
-        // 1. 构建基础权限过滤 (Permission Filter)
-        if (!isAdmin) {
-            filterExpression = String.format(
-                    "(user_id == '0' && is_public == '1') || user_id == '%s'",
-                    userId.toString()
-            );
-        }
-
-        // 2. 叠加类别过滤 (Category Filter)
-        if (category != null && !category.isBlank()) {
-            String categoryFilter = String.format("category == '%s'", category);
-
-            if (filterExpression.isEmpty()) {
-                filterExpression = categoryFilter;
-            } else {
-                // 如果已有权限过滤，则用 AND 拼接: (权限逻辑) && category == 'xxx'
-                filterExpression = String.format("(%s) && %s", filterExpression, categoryFilter);
-            }
-        }
+        String filterExpression = buildFilterExpression(userId, isAdmin, category);
 
         try {
             var builder = SearchRequest.builder()
@@ -416,7 +492,6 @@ public class VectorStoreHelper {
                     .topK(topK)
                     .similarityThreshold(threshold);
 
-            // 只有当表达式不为空时才设置 filter
             if (!filterExpression.isEmpty()) {
                 builder.filterExpression(filterExpression);
             }
@@ -429,29 +504,67 @@ public class VectorStoreHelper {
         }
     }
 
+    /**
+     * 构建过滤表达式
+     */
+    private String buildFilterExpression(Long userId, boolean isAdmin, String category) {
+        StringBuilder filter = new StringBuilder();
 
+        // 1. 权限过滤
+        if (!isAdmin) {
+            filter.append("(user_id == '0' && is_public == '1') || user_id == '")
+                  .append(userId);
+        }
+
+        // 2. 类别过滤
+        if (category != null && !category.isBlank()) {
+            if (!filter.isEmpty()) {
+                filter.append(" && ");
+            }
+            filter.append("category == '").append(category).append("'");
+        }
+
+        return filter.toString();
+    }
+
+    // ==================== 工具方法 ====================
+
+    /**
+     * 根据文件名推断文档类别
+     *
+     * <p>分类优先级：</p>
+     * <ol>
+     *   <li>BUSINESS - 商业/价格（结算、电价、费用、补偿）</li>
+     *   <li>TECHNICAL - 技术/运行（技术、参数、标准、设备）</li>
+     *   <li>REGULATION - 规则/合规（默认，兜底）</li>
+     * </ol>
+     *
+     * @param filename 文件名
+     * @return 类别代码
+     */
     private String inferCategoryFromFilename(String filename) {
-        if (filename == null) return "REGULATION"; // 默认兜底
+        if (filename == null) {
+            return Category.REGULATION;
+        }
+
         String name = filename.toLowerCase();
 
-        // 1. 第一优先级：商务/价格 (钱是最敏感的，涉及结算公式和电价)
+        // 1. BUSINESS - 商业/价格
         if (name.contains("结算") || name.contains("价格") || name.contains("电价") ||
                 name.contains("费用") || name.contains("补偿") || name.contains("合约") ||
                 name.contains("零售")) {
-            return "BUSINESS";
+            return Category.BUSINESS;
         }
 
-        // 2. 第二优先级：技术/运行 (涉及具体物理参数、设备、曲线)
+        // 2. TECHNICAL - 技术/运行
         if (name.contains("技术") || name.contains("参数") || name.contains("标准") ||
                 name.contains("接入") || name.contains("负荷") || name.contains("曲线") ||
                 name.contains("储能") || name.contains("虚拟电厂") || name.contains("光伏") ||
                 name.contains("新能源") || name.contains("调频")) {
-            return "TECHNICAL";
+            return Category.TECHNICAL;
         }
 
-        // 3. 第三优先级：规则/合规 (兜底，涉及管理办法、考核、信用)
-        // 包含：规则、细则(非结算类)、办法、通知、指引、监管、评价
-        return "REGULATION";
+        // 3. REGULATION - 默认
+        return Category.REGULATION;
     }
-
 }

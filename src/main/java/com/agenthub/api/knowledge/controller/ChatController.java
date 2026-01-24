@@ -1,6 +1,5 @@
 package com.agenthub.api.knowledge.controller;
 
-import com.agenthub.api.ai.service.impl.RagChatServiceImpl;
 import com.agenthub.api.common.base.BaseController;
 import com.agenthub.api.common.core.domain.AjaxResult;
 import com.agenthub.api.common.utils.SecurityUtils;
@@ -34,7 +33,6 @@ import java.util.stream.Collectors;
 public class ChatController extends BaseController {
 
     private final IChatService chatService;
-    private final RagChatServiceImpl ragChatService;
     private final IChatHistoryService chatHistoryService;
     private final com.agenthub.api.knowledge.service.IChatSessionService chatSessionService;
 
