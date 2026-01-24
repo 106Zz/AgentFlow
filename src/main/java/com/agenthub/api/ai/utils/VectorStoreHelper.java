@@ -503,7 +503,8 @@ public class VectorStoreHelper {
         // 1. 权限过滤
         if (!isAdmin) {
             filter.append("(user_id == '0' && is_public == '1') || user_id == '")
-                  .append(userId);
+                  .append(userId)
+                  .append("'");
         }
 
         // 2. 类别过滤
