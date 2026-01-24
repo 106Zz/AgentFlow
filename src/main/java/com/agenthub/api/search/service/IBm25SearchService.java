@@ -4,6 +4,7 @@ import com.agenthub.api.search.dto.req.Bm25SearchRequest;
 import com.agenthub.api.search.dto.result.Bm25SearchResult;
 
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * BM25检索服务接口
@@ -30,4 +31,7 @@ public interface IBm25SearchService {
      */
     List<Bm25SearchResult> search(String query, int topK,
                                   Long knowledgeId, Long userId, boolean isAdmin);
+
+    // 新增：异步方法
+    CompletableFuture<List<Bm25SearchResult>> searchAsync(Bm25SearchRequest request);
 }

@@ -2,10 +2,6 @@ spring:
   application:
 #    name: ai-agent
   
-  # Nacos配置导入（如果Nacos不可用，使用optional前缀避免启动失败）
-  config:
-    import: optional:nacos:ai-agent-local.yml
-  
   # 排除不需要的自动配置（排除语音相关功能）
   autoconfigure:
     exclude:
@@ -76,6 +72,9 @@ spring:
   ai:
     dashscope:
       api-key: sk-2bb62fd51dd646e89e8bffddb8aed7dd
+      # 设置超时时间（单位：毫秒）解决大文件处理超时问题
+      connection-timeout: 10000
+      read-timeout: 60000
       chat:
         options:
           model: deepseek-v3.2

@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.agenthub.api.search.mapper.Bm25DocFreqMapper">
+
+    <!--
+        重建文档频率表：
+        1. 先清空（使用 TRUNCATE 更快）
+        2. 从 term_freq 表重新聚合
+    -->
+    <update id="rebuildFromTermFreq">
+        TRUNCATE TABLE bm25_doc_freq;
+
+        INSERT INTO bm25_doc_freq (term, doc_count, update_time)
+        SELECT term, COUNT(DISTINCT doc_id), NOW()
+        FROM bm25_term_freq
+        GROUP BY term
+    </update>
+
+    <!--
+        批量 UPSERT 文档频率
+        注意：使用 EXCLUDED.doc_count 设置为新值（不是累加）
+    -->
+    <insert id="insertOrUpdateBatch">
+        INSERT INTO bm25_doc_freq (term, doc_count, update_time)
+        VALUES
+        <foreach collection="list" item="item" separator=",">
+            (#{item.term}, #{item.docCount}, NOW())
+        </foreach>
+        ON CONFLICT (term)
+        DO UPDATE SET
+        doc_count = EXCLUDED.doc_count,
+        update_time = NOW()
+    </insert>
+
+</mapper>

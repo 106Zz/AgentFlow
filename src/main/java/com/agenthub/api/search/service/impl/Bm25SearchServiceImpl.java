@@ -5,12 +5,14 @@ import com.agenthub.api.search.domain.Bm25DocFreq;
 import com.agenthub.api.search.domain.Bm25Index;
 import com.agenthub.api.search.domain.Bm25Stats;
 import com.agenthub.api.search.domain.Bm25TermFreq;
+import com.agenthub.api.search.domain.VectorStoreDoc;
 import com.agenthub.api.search.dto.req.Bm25SearchRequest;
 import com.agenthub.api.search.dto.result.Bm25SearchResult;
 import com.agenthub.api.search.mapper.Bm25DocFreqMapper;
 import com.agenthub.api.search.mapper.Bm25IndexMapper;
 import com.agenthub.api.search.mapper.Bm25StatsMapper;
 import com.agenthub.api.search.mapper.Bm25TermFreqMapper;
+import com.agenthub.api.search.mapper.VectorStoreDocMapper;
 import com.agenthub.api.search.service.IBm25SearchService;
 import com.agenthub.api.search.util.ChineseTokenizer;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -19,9 +21,11 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.pgvector.PgVectorStore;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
 /**
@@ -38,6 +42,7 @@ public class Bm25SearchServiceImpl implements IBm25SearchService {
     private final Bm25StatsMapper statsMapper;
     private final ChineseTokenizer tokenizer;
     private final PgVectorStore pgVectorStore;
+    private final VectorStoreDocMapper vectorStoreDocMapper;  // 批量查询 vector_store 表
 
     /**
      * BM25 参数
@@ -138,9 +143,26 @@ public class Bm25SearchServiceImpl implements IBm25SearchService {
     }
 
     /**
+     * 异步检索方法
+     */
+    @Async("hybridSearchExecutor")  // 使用指定的线程池
+    @Override
+    public CompletableFuture<List<Bm25SearchResult>> searchAsync(Bm25SearchRequest request) {
+        try {
+            List<Bm25SearchResult> results = search(request);  // 调用原有同步方法
+            return CompletableFuture.completedFuture(results);
+        } catch (Exception e) {
+            log.error("【BM25异步检索】失败: {}", request.getQuery(), e);
+            return CompletableFuture.failedFuture(e);
+        }
+    }
+
+    /**
      * 计算 BM25 分数
      * <p>
      * 核心算法逻辑：遍历查询词，累加它们在各个文档中的得分。
+     * <p>
+     * 性能优化：批量查询 bm25_index 表，避免 N+1 查询问题
      *
      * @param queryTokens  分词后的查询词列表（例如：["光伏", "发电"]）
      * @param docFreqMap   词的文档频率映射（Key: 词, Value: 包含该词的文档数）。用于计算 IDF。
@@ -155,6 +177,8 @@ public class Bm25SearchServiceImpl implements IBm25SearchService {
             int totalDocs,
             double avgDocLength,
             Bm25SearchRequest request) {
+
+        long calcStartTime = System.currentTimeMillis();
 
         Map<String, BM25Score> scores = new HashMap<>();
 
@@ -177,18 +201,29 @@ public class Bm25SearchServiceImpl implements IBm25SearchService {
                     .put(tf.getTerm(), tf.getFrequency());
         }
 
+        // 【性能优化】批量查询 bm25_index 获取文档长度，替代 N+1 单独查询
+        Map<String, Integer> docLengthMap = new HashMap<>();
+        if (!docIds.isEmpty()) {
+            List<Bm25Index> indexList = indexMapper.selectList(
+                    new LambdaQueryWrapper<Bm25Index>()
+                            .in(Bm25Index::getInternalId, docIds)
+            );
+            for (Bm25Index index : indexList) {
+                docLengthMap.put(index.getInternalId(), index.getTokenCount());
+            }
+            log.debug("【BM25】批量查询文档长度: {} 个文档, 耗时: {}ms",
+                    indexList.size(), System.currentTimeMillis() - calcStartTime);
+        }
+
         // 对每个文档计算 BM25 分数
         for (String docId : docIds) {
             Map<String, Integer> termFreqsInDoc = docTermFreqs.get(docId);
 
-            // 获取文档长度
-            Bm25Index index = indexMapper.selectOne(
-                    new LambdaQueryWrapper<Bm25Index>()
-                            .eq(Bm25Index::getVectorId, docId)
-            );
-            if (index == null) continue;
+            // 从 Map 中获取文档长度（已批量查询）
+            Integer docLengthObj = docLengthMap.get(docId);
+            if (docLengthObj == null) continue;
+            int docLength = docLengthObj;
 
-            int docLength = index.getTokenCount();
             Set<String> matchedTerms = new HashSet<>();
 
             double totalScore = 0.0;
@@ -215,6 +250,9 @@ public class Bm25SearchServiceImpl implements IBm25SearchService {
             }
         }
 
+        log.debug("【BM25】计算分数完成: {} 个文档, 耗时: {}ms",
+                scores.size(), System.currentTimeMillis() - calcStartTime);
+
         return scores;
     }
 
@@ -236,22 +274,97 @@ public class Bm25SearchServiceImpl implements IBm25SearchService {
     }
 
     /**
-     * 填充文档内容和元数据
-     * 通过 internal_id 从向量库精确查询文档
+     * 填充 chunk 内容和元数据
+     * <p>
+     * 【性能优化】使用 MyBatis Mapper 批量查询替代 N+1 向量检索查询
+     * <p>
+     * 说明：BM25 检索返回的是 chunk（文档片段），不是完整文档
+     * 每个 chunk 的 metadata 包含来源文档信息（filename 等）
      */
     private void fillDocumentContent(List<Bm25SearchResult> results) {
         if (results.isEmpty()) return;
 
-        // 批量获取文档内容（按 internal_id 过滤）
+        long fillStartTime = System.currentTimeMillis();
+
+        // 收集所有 internal_id（业务标识）
+        List<String> internalIds = results.stream()
+                .map(Bm25SearchResult::getDocId)
+                .distinct()
+                .toList();
+
+        // 【关键优化】使用 Mapper 批量查询，替代 N+1 向量检索
+        // 用 internal_id 作为 key，因为 result.getDocId() 是 internal_id
+        Map<String, VectorStoreDoc> chunkMap = new HashMap<>();
+        try {
+            List<VectorStoreDoc> chunks = vectorStoreDocMapper.selectByIds(internalIds);
+            for (VectorStoreDoc chunk : chunks) {
+                // 从 metadata 中提取 internal_id 作为 key
+                String internalId = extractInternalId(chunk.getMetadata());
+                if (internalId != null) {
+                    chunkMap.put(internalId, chunk);
+                }
+            }
+
+            log.debug("【BM25】批量查询 chunk 内容: {} 个 chunk, 耗时: {}ms",
+                    chunks.size(), System.currentTimeMillis() - fillStartTime);
+
+        } catch (Exception e) {
+            log.warn("【BM25】批量查询失败，降级为逐个查询", e);
+            fillDocumentContentFallback(results);
+            return;
+        }
+
+        // 填充结果
+        int found = 0;
+        for (Bm25SearchResult result : results) {
+            VectorStoreDoc chunk = chunkMap.get(result.getDocId());
+            if (chunk != null && chunk.getContent() != null) {
+                result.setContent(chunk.getContent());
+                result.setMetadata(parseMetadata(chunk.getMetadata()));
+                found++;
+            } else {
+                log.warn("【BM25】未找到 chunk: internal_id={}", result.getDocId());
+                result.setContent("[chunk 内容未找到]");
+                result.setMetadata(new HashMap<>());
+            }
+        }
+
+        log.debug("【BM25】填充完成: {}/{} 个 chunk, 耗时: {}ms",
+                found, results.size(), System.currentTimeMillis() - fillStartTime);
+    }
+
+    /**
+     * 从 JSONB metadata 中提取 internal_id
+     */
+    private String extractInternalId(String metadataJson) {
+        if (metadataJson == null || metadataJson.isEmpty()) {
+            return null;
+        }
+        try {
+            com.fasterxml.jackson.databind.ObjectMapper mapper =
+                    new com.fasterxml.jackson.databind.ObjectMapper();
+            Map<String, Object> metadata = mapper.readValue(metadataJson,
+                    new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
+            return (String) metadata.get("internal_id");
+        } catch (Exception e) {
+            log.debug("解析 metadata 失败: {}", metadataJson, e);
+            return null;
+        }
+    }
+
+    /**
+     * 降级处理：逐个查询向量库（原来的方式，很慢）
+     */
+    private void fillDocumentContentFallback(List<Bm25SearchResult> results) {
+        log.warn("降级处理了！！！");
         for (Bm25SearchResult result : results) {
             try {
-                // 使用 filterExpression 按 internal_id 精确查询
                 List<Document> docs = pgVectorStore.similaritySearch(
                         SearchRequest.builder()
-                                .query("")  // 空查询，仅靠过滤条件
+                                .query("")
                                 .topK(1)
                                 .filterExpression("internal_id == '" + result.getDocId() + "'")
-                                .similarityThreshold(0.0)  // 不限制相似度，取过滤后的第一条
+                                .similarityThreshold(0.0)
                                 .build()
                 );
 
@@ -260,7 +373,6 @@ public class Bm25SearchServiceImpl implements IBm25SearchService {
                     result.setContent(doc.getText());
                     result.setMetadata(doc.getMetadata());
                 } else {
-                    log.warn("【BM25】未找到文档: internal_id={}", result.getDocId());
                     result.setContent("[文档内容未找到]");
                     result.setMetadata(new HashMap<>());
                 }
@@ -269,6 +381,24 @@ public class Bm25SearchServiceImpl implements IBm25SearchService {
                 result.setContent("[获取失败]");
                 result.setMetadata(new HashMap<>());
             }
+        }
+    }
+
+    /**
+     * 解析 JSONB metadata 字段
+     */
+    private Map<String, Object> parseMetadata(String metadataJson) {
+        if (metadataJson == null || metadataJson.isEmpty()) {
+            return new HashMap<>();
+        }
+        try {
+            com.fasterxml.jackson.databind.ObjectMapper mapper =
+                    new com.fasterxml.jackson.databind.ObjectMapper();
+            return mapper.readValue(metadataJson,
+                    new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
+        } catch (Exception e) {
+            log.debug("解析 metadata 失败: {}", metadataJson, e);
+            return new HashMap<>();
         }
     }
 

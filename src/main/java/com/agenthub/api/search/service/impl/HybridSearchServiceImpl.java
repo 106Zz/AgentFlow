@@ -18,6 +18,9 @@ import org.springframework.stereotype.Service;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
 
 /**
@@ -96,26 +99,59 @@ public class HybridSearchServiceImpl implements IHybridSearchService {
      * <p>优势：只看排名，不看分数，分数量纲不同时也能工作</p>
      */
     private List<HybridSearchResult> rrfFusion(HybridSearchRequest request) {
-        // 步骤1：执行两种检索
-        List<Document> vectorResults = doVectorSearch(request);
-        List<Bm25SearchResult> bm25Results = doBm25Search(request);
+        long startTime = System.currentTimeMillis();
 
-        log.debug("【混合检索】向量结果: {}, BM25结果: {}",
-                vectorResults.size(), bm25Results.size());
+        // 并行执行两种检索
+        CompletableFuture<List<Document>> vectorFuture = CompletableFuture.supplyAsync(() -> {
+            try {
+                return doVectorSearch(request);
+            } catch (Exception e) {
+                log.warn("【混合检索】向量检索失败: {}", request.getQuery(), e);
+                return Collections.emptyList();
+            }
+        });
 
-        // 步骤2：RRF融合
-        int k = request.getRrfK() != null ? request.getRrfK() : 60;
-        List<HybridSearchResult> fused = rrfFusion.fuse(
-                vectorResults,
-                bm25Results,
-                k,
-                request.getTopK()
+        // 方法2：BM25检索 - 调用已实现的异步方法
+        CompletableFuture<List<Bm25SearchResult>> bm25Future = bm25SearchService.searchAsync(
+                convertToBm25Request(request)
         );
 
-        // 步骤3：填充缺失的内容（部分结果可能在融合时没有填充完整）
-        fillMissingContent(fused, vectorResults, bm25Results);
+        // 等待完成
+        try {
+            CompletableFuture.allOf(vectorFuture, bm25Future)
+                    .get(10, TimeUnit.SECONDS);
 
-        return fused;
+            List<Document> vectorResults = vectorFuture.get();
+            List<Bm25SearchResult> bm25Results = bm25Future.get();
+
+            log.debug("【混合检索】向量结果: {}, BM25结果: {}",
+                    vectorResults.size(), bm25Results.size());
+
+            // RRF 融合（原有逻辑）
+            int k = request.getRrfK() != null ? request.getRrfK() : 60;
+            List<HybridSearchResult> fused = rrfFusion.fuse(
+                    vectorResults,
+                    bm25Results,
+                    k,
+                    request.getTopK()
+            );
+
+            // 填充缺失内容
+            fillMissingContent(fused, vectorResults, bm25Results);
+
+            long elapsed = System.currentTimeMillis() - startTime;
+            log.info("【混合检索-并行】查询: '{}', 返回: {}, 耗时: {}ms",
+                    request.getQuery(), fused.size(), elapsed);
+
+            return fused;
+
+        } catch (TimeoutException e) {
+            log.error("【混合检索】超时: {}", request.getQuery());
+            return Collections.emptyList();
+        } catch (Exception e) {
+            log.error("【混合检索】并行执行异常", e);
+            throw new RuntimeException("混合检索失败", e);
+        }
     }
 
     /**
@@ -126,60 +162,95 @@ public class HybridSearchServiceImpl implements IHybridSearchService {
      * <p>劣势：依赖标准化步骤，计算更复杂</p>
      */
     private List<HybridSearchResult> weightedFusion(HybridSearchRequest request) {
-        // 步骤1：执行检索
-        List<Document> vectorResults = doVectorSearch(request);
-        List<Bm25SearchResult> bm25Results = doBm25Search(request);
+        long startTime = System.currentTimeMillis();
 
-        // 步骤2：提取原始分数
-        Map<String, Double> vectorScores = vectorResults.stream()
-                .collect(Collectors.toMap(
-                        Document::getId,
-                        doc -> getSimilarityScore(doc)
-                ));
 
-        Map<String, Double> bm25Scores = bm25Results.stream()
-                .collect(Collectors.toMap(
-                        Bm25SearchResult::getDocId,
-                        Bm25SearchResult::getScore
-                ));
+        // 并行执行两种检索
+        CompletableFuture<List<Document>> vectorFuture = CompletableFuture.supplyAsync(() -> {
+            try {
+                return doVectorSearch(request);
+            } catch (Exception e) {
+                log.warn("【混合检索】向量检索失败: {}", request.getQuery(), e);
+                return Collections.emptyList();
+            }
+        });
 
-        // 步骤3：Min-Max标准化到 [0, 1]
-        Map<String, Double> normalizedVector = rrfFusion.normalize(vectorScores);
-        Map<String, Double> normalizedBm25 = rrfFusion.normalize(bm25Scores);
-
-        // 步骤4：加权融合
-        double bm25Weight = request.getBm25Weight();
-        Map<String, Double> fusedScores = rrfFusion.weightedFuse(
-                normalizedVector,
-                normalizedBm25,
-                bm25Weight
+        CompletableFuture<List<Bm25SearchResult>> bm25Future = bm25SearchService.searchAsync(
+                convertToBm25Request(request)
         );
 
-        // 步骤5：构建查找映射（用于填充内容）
-        Map<String, Document> vectorMap = vectorResults.stream()
-                .collect(Collectors.toMap(Document::getId, doc -> doc));
 
-        Map<String, Bm25SearchResult> bm25Map = bm25Results.stream()
-                .collect(Collectors.toMap(
-                        Bm25SearchResult::getDocId,
-                        result -> result
-                ));
+        // 等待完成（超时从 5 秒增加到 10 秒，避免 BM25 检索慢导致超时）
+        try {
+            CompletableFuture.allOf(vectorFuture, bm25Future)
+                    .get(10, TimeUnit.SECONDS);
 
-        // 步骤6：构建最终结果
-        return fusedScores.entrySet().stream()
-                .sorted((a, b) -> Double.compare(b.getValue(), a.getValue()))
-                .limit(request.getTopK())
-                .map(e -> {
-                    HybridSearchResult result = new HybridSearchResult();
-                    result.setDocId(e.getKey());
-                    result.setScore(e.getValue());
+            List<Document> vectorResults = vectorFuture.get();
+            List<Bm25SearchResult> bm25Results = bm25Future.get();
 
-                    // 填充内容和元数据
-                    fillResultContent(result, vectorMap, bm25Map);
+            // 步骤2：提取原始分数
+            Map<String, Double> vectorScores = vectorResults.stream()
+                    .collect(Collectors.toMap(
+                            Document::getId,
+                            doc -> getSimilarityScore(doc)
+                    ));
 
-                    return result;
-                })
-                .collect(Collectors.toList());
+            Map<String, Double> bm25Scores = bm25Results.stream()
+                    .collect(Collectors.toMap(
+                            Bm25SearchResult::getDocId,
+                            Bm25SearchResult::getScore
+                    ));
+
+            // 步骤3：Min-Max标准化到 [0, 1]
+            Map<String, Double> normalizedVector = rrfFusion.normalize(vectorScores);
+            Map<String, Double> normalizedBm25 = rrfFusion.normalize(bm25Scores);
+
+            // 步骤4：加权融合
+            double bm25Weight = request.getBm25Weight();
+            Map<String, Double> fusedScores = rrfFusion.weightedFuse(
+                    normalizedVector,
+                    normalizedBm25,
+                    bm25Weight
+            );
+
+            // 步骤5：构建查找映射（用于填充内容）
+            Map<String, Document> vectorMap = vectorResults.stream()
+                    .collect(Collectors.toMap(Document::getId, doc -> doc));
+
+            Map<String, Bm25SearchResult> bm25Map = bm25Results.stream()
+                    .collect(Collectors.toMap(
+                            Bm25SearchResult::getDocId,
+                            result -> result
+                    ));
+
+            // 步骤6：构建最终结果
+            List<HybridSearchResult> results = fusedScores.entrySet().stream()
+                    .sorted((a, b) -> Double.compare(b.getValue(), a.getValue()))
+                    .map(e -> {
+                        HybridSearchResult result = new HybridSearchResult();
+                        result.setDocId(e.getKey());
+                        result.setScore(e.getValue());
+
+                        // 填充内容和元数据
+                        fillResultContent(result, vectorMap, bm25Map);
+
+                        return result;
+                    })
+                    .collect(Collectors.toList());
+
+            long elapsed = System.currentTimeMillis() - startTime;
+            log.info("【混合检索-加权并行】查询: '{}', 返回: {}, 耗时: {}ms",
+                    request.getQuery(), results.size(), elapsed);
+
+            return results;
+
+        } catch (TimeoutException e) {
+            log.error("【混合检索】超时: {}", request.getQuery());
+            return Collections.emptyList();
+        } catch (Exception e) {
+            log.error("【混合检索】并行执行异常", e);
+            throw new RuntimeException("混合检索失败", e);
+        }
     }
 
     // ==================== 检索器实现 ====================
@@ -194,12 +265,35 @@ public class HybridSearchServiceImpl implements IHybridSearchService {
         // 使用正确的内部类名：Builder 而非 SearchRequestBuilder
         SearchRequest.Builder builder = SearchRequest.builder()
                 .query(request.getQuery())
-                .topK(request.getVectorTopK());
+                .topK(request.getVectorTopK())
+                .similarityThreshold(0.0); // 显式设置阈值为0，避免默认值过高导致无结果
 
-        // 添加知识库过滤条件
+        // 构建过滤表达式
+        StringBuilder filter = new StringBuilder();
+
+        // 1. 知识库过滤 (Priority 1)
         if (request.getKnowledgeId() != null) {
-            builder.filterExpression("knowledge_id == '%s'"
-                    .formatted(request.getKnowledgeId().toString()));
+            filter.append("knowledge_id == '").append(request.getKnowledgeId()).append("'");
+        }
+
+        // 2. 权限过滤 (Priority 2)
+        // 只有非管理员需要检查权限
+        if (request.getIsAdmin() != null && !request.getIsAdmin()) {
+            if (!filter.isEmpty()) {
+                filter.append(" && ");
+            }
+            
+            // 权限逻辑：(是公开的) OR (是自己的)
+            // (user_id == '0' && is_public == '1') || user_id == '123'
+            filter.append("( (user_id == '0' && is_public == '1') || user_id == '")
+                  .append(request.getUserId())
+                  .append("' )");
+        }
+        
+        // 应用过滤器
+        String filterExpr = filter.toString();
+        if (!filterExpr.isEmpty()) {
+            builder.filterExpression(filterExpr);
         }
 
         try {
@@ -316,5 +410,18 @@ public class HybridSearchServiceImpl implements IHybridSearchService {
             return 1.0 - distance;
         }
         return 1.0;  // 默认最高分数（当无法获取distance时）
+    }
+
+    /**
+     * 转换为 BM25 请求
+     */
+    private Bm25SearchRequest convertToBm25Request(HybridSearchRequest request) {
+        Bm25SearchRequest bm25Request = new Bm25SearchRequest();
+        bm25Request.setQuery(request.getQuery());
+        bm25Request.setTopK(request.getBm25TopK());
+        bm25Request.setKnowledgeId(request.getKnowledgeId());
+        bm25Request.setUserId(request.getUserId());
+        bm25Request.setIsAdmin(request.getIsAdmin());
+        return bm25Request;
     }
 }
