@@ -32,7 +32,7 @@ import java.util.List;
  */
 @SpringBootTest
 @TestPropertySource(properties = {
-        "knowledge.retrieval.enable-hybrid=true"  // 默认关闭混合检索，可手动修改
+        "knowledge.retrieval.enable-hybrid=false"  // 默认关闭混合检索，可手动修改
 })
 class HybridRetrievalComparisonTest {
 
