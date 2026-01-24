@@ -100,7 +100,6 @@ public class RRFFusion {
         // 按融合分数排序
         return fusedMap.values().stream()
                 .sorted((a, b) -> Double.compare(b.getScore(), a.getScore()))
-                .limit(topK)
                 .collect(Collectors.toList());
     }
 

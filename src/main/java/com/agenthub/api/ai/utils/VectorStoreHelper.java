@@ -17,6 +17,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.awt.image.BufferedImage;
@@ -389,7 +390,7 @@ public class VectorStoreHelper {
     }
 
     /**
-     * 存储向量并异步构建BM25索引
+     * 存储向量并同步批量构建BM25索引
      */
     private void storeWithIndex(List<Document> chunks, Long knowledgeId, Long userId) {
         for (int i = 0; i < chunks.size(); i += VECTOR_BATCH_SIZE) {
@@ -399,19 +400,8 @@ public class VectorStoreHelper {
             // 存储向量
             vectorStore.add(batch);
 
-            // 异步构建BM25索引
-            for (Document doc : batch) {
-                String vectorId = (String) doc.getMetadata().get("internal_id");
-                String content = doc.getText();
 
-                CompletableFuture.runAsync(() -> {
-                    try {
-                        bm25IndexService.indexDocument(vectorId, content, knowledgeId, userId);
-                    } catch (Exception e) {
-                        log.error("【BM25索引】构建失败: {}", vectorId, e);
-                    }
-                });
-            }
+            bm25IndexService.batchIndexDocuments(batch, knowledgeId, userId);
 
             log.info("【写入向量库】已存储 {}-{} / {} 块", i + 1, end, chunks.size());
         }
@@ -425,48 +415,48 @@ public class VectorStoreHelper {
      * @param knowledgeId 知识库ID
      * @return 删除的记录数
      */
+    @Transactional(rollbackFor = Exception.class)
     public int deleteDocumentVectors(Long knowledgeId) {
-        log.info("【删除向量】开始删除知识库 {} 的数据", knowledgeId);
+        try {
+            log.info("【删除向量】开始删除知识库 {} 的数据", knowledgeId);
 
-        // 1. 查询所有向量数据
-        List<Document> documents = vectorStore.similaritySearch(
-                SearchRequest.builder()
-                        .query("delete-placeholder")
-                        .topK(9999)
-                        .filterExpression("knowledge_id == '%s'".formatted(knowledgeId.toString()))
-                        .build()
-        );
+            // 1. 查询所有向量数据
+            List<Document> documents = vectorStore.similaritySearch(
+                    SearchRequest.builder()
+                            .query("delete-placeholder")
+                            .topK(9999)
+                            .filterExpression("knowledge_id == '%s'".formatted(knowledgeId.toString()))
+                            .build()
+            );
 
-        if (documents.isEmpty()) {
-            log.warn("【删除向量】未找到知识库 {} 的数据", knowledgeId);
-            return 0;
-        }
-
-        // 2. 提取ID列表
-        List<String> internalIds = documents.stream()
-                .map(d -> (String) d.getMetadata().get("internal_id"))
-                .toList();
-
-        List<String> vectorStoreIds = documents.stream()
-                .map(Document::getId)
-                .toList();
-
-        // 3. 删除BM25索引
-        for (String vectorId : internalIds) {
-            try {
-                bm25IndexService.deleteDocument(vectorId);
-            } catch (Exception e) {
-                log.warn("【BM25索引】删除失败: {}", vectorId, e);
+            if (documents.isEmpty()) {
+                log.warn("【删除向量】未找到知识库 {} 的数据", knowledgeId);
+                return 0;
             }
-        }
 
-        // 4. 删除向量数据
-        if (!vectorStoreIds.isEmpty()) {
-            vectorStore.delete(vectorStoreIds);
-        }
+            // 2. 提取ID列表
+            List<String> internalIds = documents.stream()
+                    .map(d -> (String) d.getMetadata().get("internal_id"))
+                    .toList();
 
-        log.info("【删除向量】完成，删除 {} 条记录", vectorStoreIds.size());
-        return vectorStoreIds.size();
+            List<String> vectorStoreIds = documents.stream()
+                    .map(Document::getId)
+                    .toList();
+
+            // 3. 删除BM25索引
+            bm25IndexService.deleteByKnowledgeId(knowledgeId);
+
+            // 4. 删除向量数据
+            if (!vectorStoreIds.isEmpty()) {
+                vectorStore.delete(vectorStoreIds);
+            }
+
+            log.info("【删除向量】完成，删除 {} 条记录", vectorStoreIds.size());
+            return vectorStoreIds.size();
+        } catch (Exception e) {
+            log.error("【删除向量】删除失败，事务回滚: knowledgeId={}", knowledgeId, e);
+            throw e;  // 触发回滚
+        }
     }
 
     // ==================== 检索方法 ====================

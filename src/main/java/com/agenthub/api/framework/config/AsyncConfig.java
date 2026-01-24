@@ -2,8 +2,10 @@ package com.agenthub.api.framework.config;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.aop.interceptor.AsyncUncaughtExceptionHandler;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.scheduling.annotation.AsyncConfigurer;
 import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
@@ -15,7 +17,7 @@ import java.util.concurrent.ThreadPoolExecutor;
  */
 @Configuration
 @EnableAsync
-public class AsyncConfig {
+public class AsyncConfig implements AsyncConfigurer {
 
     private static final Logger log = LoggerFactory.getLogger(AsyncConfig.class);
 
@@ -105,4 +107,31 @@ public class AsyncConfig {
         log.info("Agent工作线程池初始化完成");
         return executor;
     }
+
+    @Bean("hybridSearchExecutor")
+    public Executor hybridSearchExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(2);        // 核心线程数
+        executor.setMaxPoolSize(4);         // 最大线程数
+        executor.setQueueCapacity(10);      // 队列容量
+        executor.setThreadNamePrefix("hybrid-search-");
+        executor.setWaitForTasksToCompleteOnShutdown(true);
+        executor.setAwaitTerminationSeconds(30);
+        executor.initialize();
+
+        log.info("【异步配置】混合检索线程池初始化完成");
+        return executor;
+    }
+
+    /**
+     * 异步异常处理器
+     */
+    @Override
+    public AsyncUncaughtExceptionHandler getAsyncUncaughtExceptionHandler() {
+        return (throwable, method, params) -> {
+            log.error("【异步异常】方法: {}, 参数: {}, 异常: {}",
+                    method.getName(), params, throwable.getMessage(), throwable);
+        };
+    }
+
 }
