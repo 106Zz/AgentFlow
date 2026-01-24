@@ -31,7 +31,19 @@ public class DashScopeRerankerConfig {
         }
 
         if(documents.size()<=topN){
-            log.info("候选文档数量 {} <= topN {}，无需 Rerank", documents.size(), topN);
+            log.info("候选文档数量 {} <= topN {}，无需 Rerank，保留原有分数", documents.size(), topN);
+            // 保留原有分数作为 rerank_score（避免显示为 0）
+            for (Document doc : documents) {
+                Object originalScore = doc.getMetadata().get("hybrid_score");
+                if (originalScore != null) {
+                    doc.getMetadata().put("rerank_score", originalScore);
+                } else {
+                    Object vectorScore = doc.getMetadata().get("vector_score");
+                    if (vectorScore != null) {
+                        doc.getMetadata().put("rerank_score", vectorScore);
+                    }
+                }
+            }
             return documents;
         }
 
@@ -53,6 +65,9 @@ public class DashScopeRerankerConfig {
         try {
             //解析响应
             JSONObject response = JSONUtil.parseObj(responseStr);
+
+            // 打印原始响应用于调试
+            log.info("Rerank API 原始响应: {}", responseStr);
 
             //检查错误
             if(response.containsKey("code")){
@@ -77,6 +92,8 @@ public class DashScopeRerankerConfig {
                         int index = item.getInt("index");
                         double score = item.getDouble("relevance_score");
 
+                        log.debug("Rerank 结果: index={}, score={}", index, score);
+
                         Document doc = documents.get(index);
                         // 保存 Rerank 分数到 metadata
                         doc.getMetadata().put("rerank_score", score);
@@ -86,6 +103,17 @@ public class DashScopeRerankerConfig {
 
             long elapsed = System.currentTimeMillis() - startTime;
             log.info("Rerank 完成：返回 {} 个文档，耗时 {}ms", reranked.size(), elapsed);
+
+            // 打印分数范围用于调试
+            reranked.stream()
+                .limit(5)
+                .forEach(doc -> {
+                    Object score = doc.getMetadata().get("rerank_score");
+                    log.info("  文档 score={}, hybrid_score={}, vector_score={}",
+                        score,
+                        doc.getMetadata().get("hybrid_score"),
+                        doc.getMetadata().get("vector_score"));
+                });
 
             return reranked;
         } catch (Exception e) {
@@ -134,9 +162,24 @@ public class DashScopeRerankerConfig {
 
     /**
      * 降级处理：返回原始结果的前 topN 个
+     * 保留原有分数作为 rerank_score
      */
     private List<Document> fallbackToOriginal(List<Document> documents, int topN) {
         int actualTopN = Math.min(topN, documents.size());
-        return documents.subList(0, actualTopN);
+        List<Document> fallback = documents.subList(0, actualTopN);
+
+        // 保留原有分数
+        for (Document doc : fallback) {
+            Object originalScore = doc.getMetadata().get("hybrid_score");
+            if (originalScore != null) {
+                doc.getMetadata().put("rerank_score", originalScore);
+            } else {
+                Object vectorScore = doc.getMetadata().get("vector_score");
+                if (vectorScore != null) {
+                    doc.getMetadata().put("rerank_score", vectorScore);
+                }
+            }
+        }
+        return fallback;
     }
 }

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.agenthub.api.search.mapper.Bm25TermFreqMapper">
+
+    <!-- 批量插入（PostgreSQL 语法） -->
+    <insert id="insertBatch">
+        INSERT INTO bm25_term_freq (term, doc_id, frequency)
+        VALUES
+        <foreach collection="list" item="item" separator=",">
+            (#{item.term}, #{item.docId}, #{item.frequency})
+        </foreach>
+        ON CONFLICT (term, doc_id) DO UPDATE SET frequency = EXCLUDED.frequency
+    </insert>
+
+</mapper>

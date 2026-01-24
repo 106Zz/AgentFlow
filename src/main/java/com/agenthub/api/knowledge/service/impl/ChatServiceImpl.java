@@ -1,6 +1,5 @@
 package com.agenthub.api.knowledge.service.impl;
 
-import com.agenthub.api.ai.service.impl.RagChatServiceImpl;
 import com.agenthub.api.common.utils.SecurityUtils;
 import com.agenthub.api.knowledge.domain.ChatHistory;
 import com.agenthub.api.knowledge.domain.vo.ChatRequest;
@@ -15,57 +14,32 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
-import java.util.UUID;
 
 /**
  * 聊天服务实现类
+ *
+ * 注意：chat() 方法已废弃，RAG 功能已迁移到 ChatUseCase + PowerKnowledgeTool 架构
  */
 @Service
 @Slf4j
 @RequiredArgsConstructor
 public class ChatServiceImpl implements IChatService {
 
-    private final RagChatServiceImpl ragChatService;
+    // RagChatServiceImpl 已删除，RAG 功能通过 ChatUseCase 处理
     private final IChatHistoryService chatHistoryService;
     private final IChatSessionService chatSessionService;
 
     @Override
     public ChatResponse chat(ChatRequest request) {
-        Long userId = SecurityUtils.getUserId();
-        long startTime = System.currentTimeMillis();
-        
-        // 1. 生成或验证 sessionId
-        String sessionId = request.getSessionId();
-        if (sessionId == null || sessionId.isEmpty()) {
-            sessionId = UUID.randomUUID().toString();
-            log.info("生成新会话ID: {}", sessionId);
-        } else {
-            // 验证 sessionId 是否属于当前用户
-            if (!validateSessionOwnership(sessionId, userId)) {
-                throw new RuntimeException("无效的会话ID或无权访问");
-            }
-        }
-        
-        // 2. 调用 RAG 服务获取回答（自动使用 Redis 对话记忆）
-        String answer = ragChatService.chat(sessionId, request.getQuestion());
-        
-        // 3. 保存到 PostgreSQL（用于前端展示历史）
-        chatHistoryService.saveChat(sessionId, userId, request.getQuestion(), answer);
+        // ⚠️ 此方法已废弃
+        // RAG 功能已迁移到 ChatUseCase + PowerKnowledgeTool 架构
+        // 请使用 AIUnifiedController 进行对话
+        throw new UnsupportedOperationException(
+                "chat() 方法已废弃。请使用 /api/ai/unified/chat 接口进行对话。"
+        );
 
-        // 4. 更新会话列表状态（确保非流式对话也能在列表中显示）
-        chatSessionService.updateSession(sessionId, userId, request.getQuestion());
-        
-        // 5. 构建响应
-        long responseTime = System.currentTimeMillis() - startTime;
-        
-        ChatResponse response = new ChatResponse();
-        response.setSessionId(sessionId);
-        response.setAnswer(answer);
-        response.setResponseTime(responseTime);
-        
-        log.info("问答完成 - sessionId: {}, userId: {}, 耗时: {}ms", sessionId, userId, responseTime);
-        
-        return response;
+        // Long userId = SecurityUtils.getUserId();
+        // ... 以下代码已废弃 ...
     }
 
     @Override
