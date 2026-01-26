@@ -67,4 +67,18 @@ public class ChatHistory extends BaseEntity {
      * 响应时间（毫秒）
      */
     private Long responseTime;
+
+    /**
+     * 生成状态
+     * - generating: 生成中
+     * - completed: 生成完成
+     * - interrupted: 生成中断
+     * - failed: 生成失败
+     */
+    private String status;
+
+    /**
+     * 错误信息（如果生成失败）
+     */
+    private String errorMessage;
 }

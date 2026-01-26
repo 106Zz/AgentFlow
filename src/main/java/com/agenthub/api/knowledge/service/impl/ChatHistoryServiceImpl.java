@@ -3,12 +3,14 @@ package com.agenthub.api.knowledge.service.impl;
 import com.agenthub.api.knowledge.domain.ChatHistory;
 import com.agenthub.api.knowledge.mapper.ChatHistoryMapper;
 import com.agenthub.api.knowledge.service.IChatHistoryService;
+import com.agenthub.api.knowledge.service.IChatSessionService;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.memory.ChatMemoryRepository;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Map;
@@ -87,5 +89,60 @@ public class ChatHistoryServiceImpl extends ServiceImpl<ChatHistoryMapper, ChatH
         // Redis 的对话记忆会自动过期（24h TTL）
         chatMemoryRepository.deleteByConversationId(sessionId);
         log.info("会话已删除：sessionId={}, userId={}", sessionId, userId);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public Long createChatSkeleton(String sessionId, Long userId, String question) {
+        try {
+            // 单记录方案：创建一条记录，同时包含问题和空回答
+            ChatHistory record = new ChatHistory();
+            record.setSessionId(sessionId);
+            record.setUserId(userId);
+            record.setQuestion(question);  // 保存问题
+            record.setAnswer("");          // 空回答，后续更新
+            record.setStatus("generating"); // 标记为生成中
+            save(record);
+
+            log.info("会话骨架已创建: sessionId={}, userId={}, recordId={}",
+                    sessionId, userId, record.getId());
+            return record.getId();
+
+        } catch (Exception e) {
+            log.error("创建会话骨架失败: sessionId={}, userId={}", sessionId, userId, e);
+            throw e;
+        }
+    }
+
+    @Override
+    public void updateAnswer(Long id, String answer, String status) {
+        try {
+            chatHistoryMapper.updateAnswer(id, answer, status);
+            log.debug("回答内容已更新: id={}, status={}, length={}",
+                    id, status, answer != null ? answer.length() : 0);
+        } catch (Exception e) {
+            log.error("更新回答内容失败: id={}", id, e);
+            // 不抛出异常，避免影响流式输出
+        }
+    }
+
+    @Override
+    public void markAsInterrupted(Long id, String partialAnswer, String errorMsg) {
+        try {
+            // 构建最终回答（如果有部分内容则保留，否则显示中断标记）
+            String finalAnswer = (partialAnswer != null && !partialAnswer.isEmpty())
+                    ? partialAnswer + "\n\n---\n\n[生成中断]"
+                    : "[生成中断]";
+
+            // 同时更新 answer、status 和 error_message
+            chatHistoryMapper.updateAnswer(id, finalAnswer, "interrupted");
+            // 单独更新 error_message
+            chatHistoryMapper.markAsInterrupted(id, errorMsg);
+
+            log.warn("回答已标记为中断: id={}, partialLength={}", id,
+                    partialAnswer != null ? partialAnswer.length() : 0);
+        } catch (Exception e) {
+            log.error("标记中断失败: id={}", id, e);
+        }
     }
 }

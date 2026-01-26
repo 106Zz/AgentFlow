@@ -16,22 +16,22 @@ public class HybridSearchRequest {
     /**
      * 返回结果数量
      */
-    private Integer topK = 10;
+    private Integer topK = 20;
 
     /**
      * BM25 检索数量（用于融合）
      */
-    private Integer bm25TopK = 50;
+    private Integer bm25TopK = 20;
 
     /**
      * 向量检索数量（用于融合）
      */
-    private Integer vectorTopK = 50;
+    private Integer vectorTopK = 30;
 
     /**
      * RRF 参数 k（默认60）
      */
-    private Integer rrfK = 60;
+    private Integer rrfK = 50;
 
     /**
      * BM25 权重（0-1，默认0.5表示等权融合）

@@ -3,7 +3,9 @@ package com.agenthub.api.knowledge.mapper;
 import com.agenthub.api.knowledge.domain.ChatHistory;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import org.apache.ibatis.annotations.Mapper;
+import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
+import org.apache.ibatis.annotations.Update;
 
 import java.util.List;
 import java.util.Map;
@@ -32,4 +34,23 @@ public interface ChatHistoryMapper extends BaseMapper<ChatHistory> {
         LIMIT 50
     """)
     List<Map<String, Object>> selectUserSessions(Long userId);
+
+    /**
+     * 更新回答内容（用于流式生成过程中的增量更新）
+     */
+    @Update("UPDATE chat_history SET answer = #{answer}, status = #{status} " +
+            "WHERE id = #{id}")
+    int updateAnswer(@Param("id") Long id, @Param("answer") String answer, @Param("status") String status);
+
+    /**
+     * 标记生成中断
+     */
+    @Update("UPDATE chat_history SET status = 'interrupted', error_message = #{errorMsg} " +
+            "WHERE id = #{id} AND status = 'generating'")
+    int markAsInterrupted(@Param("id") Long id, @Param("errorMsg") String errorMsg);
+
+    /**
+     * 批量插入（用于保存用户问题和空回答）
+     */
+    int insertBatch(@Param("list") List<ChatHistory> list);
 }
