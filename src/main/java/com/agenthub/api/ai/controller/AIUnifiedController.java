@@ -52,6 +52,17 @@ public class AIUnifiedController extends BaseController {
 
         log.info("接收 AI 请求: user={}, session={}, query={}", userId, sessionId, requestDto.query());
 
+        // 1. 【新增】先创建会话骨架（Write-Ahead）
+        Long assistantId = null;
+
+        try {
+            assistantId = chatHistoryService.createChatSkeleton(sessionId, userId, requestDto.query());
+            log.debug("会话骨架创建成功: assistantId={}", assistantId);
+        } catch (Exception e) {
+            log.error("创建会话骨架失败，但不影响对话流", e);
+            // 即使骨架创建失败，也继续进行对话
+        }
+
         // 1. 构造核心请求对象
         AIRequest aiRequest = new AIRequest(
                 requestDto.query(),
@@ -68,6 +79,7 @@ public class AIUnifiedController extends BaseController {
         final String finalSessionId = sessionId;
         final String finalQuery = requestDto.query();
         final Long finalUserId = userId;
+        final Long finalAssistantId = assistantId;  // 用于更新
 
         return switch (response.getType()) {
             // 场景 A: 流式对话 (Chat) -> 返回 Flux<String> (SSE)
@@ -88,14 +100,34 @@ public class AIUnifiedController extends BaseController {
                             String answer = fullAnswer.toString();
                             if (!answer.isEmpty()) {
                                 try {
-                                    // 1. 保存详细对话记录到 chat_history 表
-                                    chatHistoryService.saveChat(finalSessionId, finalUserId, finalQuery, answer);
+                                    if (finalAssistantId != null) {
+                                        chatHistoryService.updateAnswer(finalAssistantId, answer, "completed");
+                                    } else {
+                                        // 降级：使用原有方法
+                                        chatHistoryService.saveChat(finalSessionId, finalUserId, finalQuery, answer);
+                                    }
                                     // 2. 更新会话状态到 chat_session 表（异步生成标题等）
                                     chatSessionService.updateSession(finalSessionId, finalUserId, finalQuery);
                                     log.info("会话保存成功: sessionId={}, userId={}", finalSessionId, finalUserId);
                                 } catch (Exception e) {
                                     log.error("保存会话失败: sessionId={}, userId={}", finalSessionId, finalUserId, e);
                                 }
+                            }
+                        })// 【新增】错误处理
+                        .doOnError(error -> {
+                            log.warn("流式输出异常: sessionId={}, error={}", finalSessionId, error.getMessage());
+                            String partialAnswer = fullAnswer.toString();
+                            if (finalAssistantId != null) {
+                                chatHistoryService.markAsInterrupted(finalAssistantId, partialAnswer, error.getMessage());
+                            }
+                        })
+                        // 【新增】取消处理（客户端断开）
+                        .doOnCancel(() -> {
+                            log.warn("流式输出被取消: sessionId={}", finalSessionId);
+                            String partialAnswer = fullAnswer.toString();
+                            if (finalAssistantId != null) {
+                                chatHistoryService.markAsInterrupted(finalAssistantId, partialAnswer, "用户取消");
+                                chatSessionService.updateSession(finalSessionId, finalUserId, finalQuery);
                             }
                         })
                         .map(text -> "data: " + text + "\n\n");
