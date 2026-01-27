@@ -204,9 +204,12 @@ public class PowerKnowledgeService {
                         .map(filename -> {
                                 // 调用下面的私有方法生成带签名的安全链接
                                 String signedUrl = generatePresignedUrl(filename);
+                                log.info("[PowerKnowledgeService] 生成 OSS 链接: filename={}, url={}", filename, signedUrl);
                                 return new PowerKnowledgeResult.SourceDocument(filename, signedUrl);
                         })
                         .collect(Collectors.toList());
+
+                log.info("[PowerKnowledgeService] sources 列表: {}", sources);
 
                 // C. 计算最高分 (用于调试)
                 double maxScore = documents.stream()

@@ -30,6 +30,7 @@ server:
 mybatis-plus:
   mapper-locations: classpath*:/mapper/**/*.xml
   type-aliases-package: com.agenthub.**.domain
+  type-handlers-package: com.agenthub.api.common.handler
   configuration:
     map-underscore-to-camel-case: true
     log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
@@ -101,3 +102,10 @@ hybrid-search:
   bm25:
     k1: 1.5                      # 词频饱和参数
     b: 0.75                      # 长度惩罚参数
+
+# Case 快照冻结配置
+case:
+  freeze:
+    enabled: true                # 是否启用 Case 冻结
+    sampling-rate: 1.0          # 采样率（0.0-1.0），默认 5%
+    fail-only: false             # 是否只记录失败的 Case

@@ -35,22 +35,22 @@ public class VectorMetadataUtils {
             String tags,
             String title,
             Integer chunkIndex) {
-        
+
         Map<String, Object> metadata = new HashMap<>();
-        
+
         // 核心字段：用于数据隔离和检索过滤
         metadata.put("knowledge_id", knowledgeId);
         metadata.put("user_id", userId);
         metadata.put("is_public", isPublic);
-        
+
         // 辅助字段：用于展示和追溯
-        metadata.put("file_name", fileName);
+        metadata.put("filename", fileName);
         metadata.put("file_type", fileType);
         metadata.put("category", category);
         metadata.put("tags", tags);
         metadata.put("title", title);
         metadata.put("chunk_index", chunkIndex);
-        
+
         return metadata;
     }
 

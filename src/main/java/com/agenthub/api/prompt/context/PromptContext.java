@@ -1,6 +1,7 @@
 package com.agenthub.api.prompt.context;
 
 import com.agenthub.api.prompt.domain.entity.SysPrompt;
+import com.fasterxml.jackson.databind.JsonNode;
 import lombok.Builder;
 import lombok.Data;
 
@@ -64,7 +65,21 @@ public class PromptContext {
         if (prompt == null || prompt.getContent() == null) {
             return null;
         }
-        return prompt.getContent().toString();
+        return extractTemplate(prompt.getContent());
+    }
+
+    /**
+     * 从 JsonNode 中提取 template 字段
+     * 如果 content 是纯文本，直接返回；如果是 JSON，提取 template 字段
+     */
+    private String extractTemplate(JsonNode content) {
+        if (content == null) {
+            return null;
+        }
+        if (content.isObject() && content.has("template")) {
+            return content.get("template").asText();
+        }
+        return content.asText();
     }
 
     /**

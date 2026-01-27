@@ -4,7 +4,9 @@ package com.agenthub.api.prompt.domain.entity;
 import com.agenthub.api.common.base.BaseEntity;
 import com.agenthub.api.prompt.enums.CaseStatus;
 import com.agenthub.api.prompt.enums.Scenario;
+import com.agenthub.api.common.handler.JsonNodeTypeHandler;
 import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -59,6 +61,7 @@ public class CaseSnapshot extends BaseEntity {
      *   "conversation_history": [...]
      * }
      */
+    @TableField(typeHandler = JsonNodeTypeHandler.class)
     private JsonNode inputData;
 
     /**
@@ -69,6 +72,7 @@ public class CaseSnapshot extends BaseEntity {
      *   "rerank_result": [...]
      * }
      */
+    @TableField(typeHandler = JsonNodeTypeHandler.class)
     private JsonNode contextData;
 
     /**
@@ -80,6 +84,7 @@ public class CaseSnapshot extends BaseEntity {
      *   "variables": {...}
      * }
      */
+    @TableField(typeHandler = JsonNodeTypeHandler.class)
     private JsonNode promptData;
 
     /**
@@ -90,6 +95,7 @@ public class CaseSnapshot extends BaseEntity {
      *   "parameters": {...}
      * }
      */
+    @TableField(typeHandler = JsonNodeTypeHandler.class)
     private JsonNode modelData;
 
     /**
@@ -102,6 +108,7 @@ public class CaseSnapshot extends BaseEntity {
      *   "finish_reason": "stop"
      * }
      */
+    @TableField(typeHandler = JsonNodeTypeHandler.class)
     private JsonNode outputData;
 
     /**
@@ -113,6 +120,7 @@ public class CaseSnapshot extends BaseEntity {
      *   "agenthub_version": "4.0.0"
      * }
      */
+    @TableField(typeHandler = JsonNodeTypeHandler.class)
     private JsonNode metadata;
 
     /**
@@ -148,10 +156,12 @@ public class CaseSnapshot extends BaseEntity {
     /**
      * Rule Judge 结果
      */
+    @TableField(typeHandler = JsonNodeTypeHandler.class)
     private JsonNode ruleJudgeResult;
 
     /**
      * AI Judge 结果
      */
+    @TableField(typeHandler = JsonNodeTypeHandler.class)
     private JsonNode aiJudgeResult;
 }
