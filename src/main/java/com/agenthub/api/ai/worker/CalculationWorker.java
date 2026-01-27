@@ -85,6 +85,9 @@ public class CalculationWorker {
                             .map(doc -> new WorkerResult.SourceEvidence(doc.filename(), doc.downloadUrl())) // ✅ 这里保留了 URL
                             .toList();
 
+            // 调试日志：检查 evidences 内容
+            log.info("[CalculationWorker] evidences 数量: {}, 内容: {}", evidences.size(), evidences);
+
             // Change 4: 构造统一的 WorkerResult
             WorkerResult result = new WorkerResult(
                     "偏差考核计算",                 // item

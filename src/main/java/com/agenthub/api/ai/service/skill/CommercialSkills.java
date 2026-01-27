@@ -4,6 +4,7 @@ import com.agenthub.api.ai.service.PowerKnowledgeService;
 import com.agenthub.api.ai.domain.knowledge.PowerKnowledgeQuery;
 import com.agenthub.api.ai.domain.worker.CommercialAuditResult;
 import com.agenthub.api.ai.domain.workflow.WorkerResult;
+import com.agenthub.api.prompt.context.PromptContextHolder;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.stereotype.Service;
@@ -44,23 +45,34 @@ public class CommercialSkills {
         // 使用 CATEGORY=BUSINESS 锁定商务文档
         var knowledge = knowledgeService.retrieve(new PowerKnowledgeQuery(itemName + " 规定", 3, null, "BUSINESS"));
 
-        // 3. 执行 AI 调用 (解析为临时的 CommercialAuditResult)
+        // 3. 获取数据库提示词模板，并进行变量替换
+        String basePrompt = PromptContextHolder.getSkill("SKILL-AUDIT-COMMERCIAL");
+        if (basePrompt == null || basePrompt.isEmpty()) {
+            // 降级：使用硬编码默认提示词
+            basePrompt = """
+                你是一个电力商务合规专家。
+                任务：审查合同中的【{item}】条款。
+
+                核心关注点：
+                {instruction}
+
+                参考依据：
+                {rules}
+                """;
+            log.debug("[CommercialSkills] 使用默认硬编码提示词（数据库未配置 SKILL-AUDIT-COMMERCIAL）");
+        }
+
+        // 替换 FreeMarker 风格的占位符
+        String systemPrompt = basePrompt
+                .replace("{item}", itemName)
+                .replace("{instruction}", specificInstruction)
+                .replace("{rules}", knowledge.answer());
+
+        // 4. 执行 AI 调用 (解析为临时的 CommercialAuditResult)
         // 这一步是为了利用 BeanOutputConverter 自动解析 JSON
         CommercialAuditResult llmRawResult = chatClient.prompt()
-                .system(s -> s.text("""
-                    你是一个电力商务合规专家。
-                    任务：审查合同中的【{item}】条款。
-                    
-                    核心关注点：
-                    {instruction}
-                    
-                    参考依据：
-                    {rules}
-                    """))
+                .system(systemPrompt)
                 .user(u -> u.text("合同片段：\n{content}")
-                        .param("item", itemName)
-                        .param("instruction", specificInstruction)
-                        .param("rules", knowledge.answer())
                         .param("content", contractContent))
                 .call()
                 .entity(CommercialAuditResult.class); // 临时对象
