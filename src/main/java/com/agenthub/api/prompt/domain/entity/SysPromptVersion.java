@@ -2,6 +2,7 @@ package com.agenthub.api.prompt.domain.entity;
 
 
 import com.agenthub.api.common.base.BaseEntity;
+import com.agenthub.api.prompt.enums.ChangeType;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
@@ -69,13 +70,4 @@ public class SysPromptVersion extends BaseEntity {
      * 从哪个版本变更
      */
     private String changeFromVersion;
-
-    /**
-     * 变更类型枚举
-     */
-    public enum ChangeType {
-        CREATE,          // 创建
-        UPDATE,          // 更新
-        ROLLBACK         // 回滚
-    }
 }

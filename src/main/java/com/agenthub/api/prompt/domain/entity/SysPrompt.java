@@ -1,6 +1,9 @@
 package com.agenthub.api.prompt.domain.entity;
 
 import com.agenthub.api.common.base.BaseEntity;
+import com.agenthub.api.prompt.enums.PromptType;
+import com.agenthub.api.prompt.enums.Scope;
+import com.agenthub.api.prompt.enums.TemplateType;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
@@ -115,44 +118,4 @@ public class SysPrompt extends BaseEntity {
      */
     @TableField(exist = false)
     private List<SysPromptTag> tagList;
-
-    /**
-     * 提示词类型枚举
-     *
-     * 对应 AgentHub v4.0 架构层级：
-     * - ROUTER  → RouterService (意图分发)
-     * - SYSTEM  → RAG 系统提示词
-     * - SKILL   → CommercialSkills, ComplianceSkills (参数提取)
-     * - TOOL    → PowerKnowledgeTool, ElectricityFormulaTool
-     * - WORKER  → CommercialWorker, CalculationWorker (工作流编排)
-     * - FEWSHOT → 少样本学习示例
-     * - POST_PROCESS → 后处理提示词
-     */
-    public enum PromptType {
-        ROUTER,          // 路由层提示词（v4.0 新增）
-        SYSTEM,          // 系统提示词
-        SKILL,           // Skill 提示词（参数提取）
-        TOOL,            // 工具提示词
-        WORKER,          // Worker 层提示词（v4.0 新增）
-        FEWSHOT,         // FewShot 示例
-        POST_PROCESS     // 后处理提示词
-    }
-
-    /**
-     * 模板类型枚举
-     */
-    public enum TemplateType {
-        FREEMARKER,      // FreeMarker 模板
-        SPEL,            // Spring EL 表达式
-        TEXT             // 纯文本
-    }
-
-    /**
-     * 作用域枚举
-     */
-    public enum Scope {
-        GLOBAL,          // 全局
-        TENANT,          // 租户级
-        USER             // 用户级
-    }
 }
