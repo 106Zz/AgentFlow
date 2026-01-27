@@ -11,6 +11,10 @@ import com.agenthub.api.prompt.domain.dto.request.PromptCreateRequest;
 import com.agenthub.api.prompt.domain.dto.request.PromptQueryRequest;
 import com.agenthub.api.prompt.domain.dto.request.PromptUpdateRequest;
 import com.agenthub.api.prompt.domain.vo.PromptVO;
+import com.agenthub.api.prompt.enums.ChangeType;
+import com.agenthub.api.prompt.enums.PromptType;
+import com.agenthub.api.prompt.enums.Scope;
+import com.agenthub.api.prompt.enums.TemplateType;
 import com.agenthub.api.prompt.mapper.SysPromptCategoryMapper;
 import com.agenthub.api.prompt.mapper.SysPromptMapper;
 import com.agenthub.api.prompt.mapper.SysPromptTagRelationMapper;
@@ -61,7 +65,7 @@ public class SysPromptServiceImpl extends ServiceImpl<SysPromptMapper, SysPrompt
         // 提示词类型精确查询
         if (StrUtil.isNotBlank(request.getPromptType())) {
             try {
-                wrapper.eq(SysPrompt::getPromptType, SysPrompt.PromptType.valueOf(request.getPromptType()));
+                wrapper.eq(SysPrompt::getPromptType, PromptType.valueOf(request.getPromptType()));
             } catch (IllegalArgumentException e) {
                 log.warn("无效的提示词类型: {}", request.getPromptType());
             }
@@ -74,7 +78,7 @@ public class SysPromptServiceImpl extends ServiceImpl<SysPromptMapper, SysPrompt
         wrapper.eq(request.getTenantId() != null, SysPrompt::getTenantId, request.getTenantId());
         // 作用域查询
         wrapper.eq(StrUtil.isNotBlank(request.getScope()), SysPrompt::getScope,
-                SysPrompt.Scope.valueOf(request.getScope()));
+                Scope.valueOf(request.getScope()));
 
         wrapper.eq(SysPrompt::getDelFlag, 0);
         wrapper.orderByDesc(SysPrompt::getPriority).orderByDesc(SysPrompt::getCreateTime);
@@ -90,7 +94,7 @@ public class SysPromptServiceImpl extends ServiceImpl<SysPromptMapper, SysPrompt
     }
 
     @Override
-    public List<SysPrompt> listByType(SysPrompt.PromptType promptType) {
+    public List<SysPrompt> listByType(PromptType promptType) {
         LambdaQueryWrapper<SysPrompt> wrapper = new LambdaQueryWrapper<>();
         wrapper.eq(SysPrompt::getPromptType, promptType)
                 .eq(SysPrompt::getIsActive, true)
@@ -152,9 +156,9 @@ public class SysPromptServiceImpl extends ServiceImpl<SysPromptMapper, SysPrompt
         BeanUtils.copyProperties(request, prompt);
 
         // 设置枚举类型
-        prompt.setPromptType(SysPrompt.PromptType.valueOf(request.getPromptType()));
-        prompt.setTemplateType(SysPrompt.TemplateType.valueOf(request.getTemplateType()));
-        prompt.setScope(SysPrompt.Scope.valueOf(request.getScope()));
+        prompt.setPromptType(PromptType.valueOf(request.getPromptType()));
+        prompt.setTemplateType(TemplateType.valueOf(request.getTemplateType()));
+        prompt.setScope(Scope.valueOf(request.getScope()));
         prompt.setIsActive(true);
         prompt.setIsLocked(false);
 
@@ -344,7 +348,7 @@ public class SysPromptServiceImpl extends ServiceImpl<SysPromptMapper, SysPrompt
         version.setPromptCode(prompt.getPromptCode());
         version.setVersion(prompt.getVersion());
         version.setContent(prompt.getContent());
-        version.setChangeType(SysPromptVersion.ChangeType.UPDATE);
+        version.setChangeType(ChangeType.UPDATE);
         version.setChangeReason(changeReason);
         version.setChangeFromVersion(lastVersion != null ? lastVersion.getVersion() : null);
 
@@ -383,7 +387,7 @@ public class SysPromptServiceImpl extends ServiceImpl<SysPromptMapper, SysPrompt
         rollbackVersion.setPromptCode(prompt.getPromptCode());
         rollbackVersion.setVersion(targetVersion.getVersion() + "-rollback");
         rollbackVersion.setContent(targetVersion.getContent());
-        rollbackVersion.setChangeType(SysPromptVersion.ChangeType.ROLLBACK);
+        rollbackVersion.setChangeType(ChangeType.ROLLBACK);
         rollbackVersion.setChangeReason("回滚到版本: " + targetVersion.getVersion());
         rollbackVersion.setChangeFromVersion(prompt.getVersion());
         versionService.create(rollbackVersion);

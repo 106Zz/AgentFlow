@@ -2,6 +2,8 @@ package com.agenthub.api.prompt.domain.entity;
 
 
 import com.agenthub.api.common.base.BaseEntity;
+import com.agenthub.api.prompt.enums.CaseStatus;
+import com.agenthub.api.prompt.enums.Scenario;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
@@ -152,23 +154,4 @@ public class CaseSnapshot extends BaseEntity {
      * AI Judge 结果
      */
     private JsonNode aiJudgeResult;
-
-    /**
-     * 场景类型枚举
-     */
-    public enum Scenario {
-        CHAT,            // 对话场景
-        CALC,            // 计算场景
-        AUDIT,           // 审计场景
-        OTHER            // 其他场景
-    }
-
-    /**
-     * Case 状态枚举
-     */
-    public enum CaseStatus {
-        PENDING,         // 等待中（流式响应进行中）
-        COMPLETED,       // 已完成
-        FAILED           // 失败
-    }
 }

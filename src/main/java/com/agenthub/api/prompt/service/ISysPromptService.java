@@ -7,6 +7,7 @@ import com.agenthub.api.prompt.domain.dto.request.PromptCreateRequest;
 import com.agenthub.api.prompt.domain.dto.request.PromptQueryRequest;
 import com.agenthub.api.prompt.domain.dto.request.PromptUpdateRequest;
 import com.agenthub.api.prompt.domain.vo.PromptVO;
+import com.agenthub.api.prompt.enums.PromptType;
 
 import java.util.List;
 
@@ -32,7 +33,7 @@ public interface ISysPromptService {
      * @param promptType 提示词类型
      * @return 提示词列表
      */
-    List<SysPrompt> listByType(SysPrompt.PromptType promptType);
+    List<SysPrompt> listByType(PromptType promptType);
 
     /**
      * 根据代码查询提示词

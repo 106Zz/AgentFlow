@@ -2,6 +2,7 @@ package com.agenthub.api.prompt.domain.entity;
 
 
 import com.agenthub.api.common.base.BaseEntity;
+import com.agenthub.api.prompt.enums.VariableType;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
@@ -83,15 +84,4 @@ public class SysPromptVariable extends BaseEntity {
      * 排序
      */
     private Integer sortOrder;
-
-    /**
-     * 变量类型枚举
-     */
-    public enum VariableType {
-        STRING,          // 字符串
-        NUMBER,          // 数字
-        ARRAY,           // 数组
-        OBJECT,          // 对象
-        BOOLEAN          // 布尔值
-    }
 }
