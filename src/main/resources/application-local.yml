@@ -11,14 +11,8 @@ spring:
   # 允许循环引用（解决Bean循环依赖问题）
   main:
     allow-circular-references: true
-  
-  cloud:
-    nacos:
-      config:
-        import-check:
-          enabled: false  # 禁用 Nacos 配置导入强制检查
 
-  # 数据源配置（已很好，无需改）
+  # 数据源配置
   datasource:
     url: jdbc:postgresql://pgm-bp19f2e2n9u253thdo.rwlb.rds.aliyuncs.com:5432/Agent_Hub
     username: zzzz

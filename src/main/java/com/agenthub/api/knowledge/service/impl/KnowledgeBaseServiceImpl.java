@@ -1,12 +1,13 @@
 package com.agenthub.api.knowledge.service.impl;
 
-import cn.hutool.core.util.ObjectUtil;
 import cn.hutool.core.util.StrUtil;
 import com.agenthub.api.ai.service.impl.DocumentProcessServiceImpl;
+import com.agenthub.api.ai.utils.VectorStoreHelper;
 import com.agenthub.api.common.core.page.PageQuery;
 import com.agenthub.api.common.core.page.PageResult;
 import com.agenthub.api.common.exception.ServiceException;
 import com.agenthub.api.common.utils.OssUtils;
+import com.agenthub.api.knowledge.domain.DeleteResult;
 import com.agenthub.api.knowledge.domain.KnowledgeBase;
 import com.agenthub.api.knowledge.mapper.KnowledgeBaseMapper;
 import com.agenthub.api.knowledge.service.IKnowledgeBaseService;
@@ -15,6 +16,7 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -27,9 +29,10 @@ import java.util.Map;
 @Slf4j
 @Service
 @RequiredArgsConstructor
-public class KnowledgeBaseServiceImpl extends ServiceImpl<KnowledgeBaseMapper, KnowledgeBase> 
+public class KnowledgeBaseServiceImpl extends ServiceImpl<KnowledgeBaseMapper, KnowledgeBase>
         implements IKnowledgeBaseService {
 
+    private final VectorStoreHelper vectorStoreHelper;
     private final DocumentProcessServiceImpl documentProcessService;
     private final OssUtils ossUtils;
 
@@ -159,40 +162,46 @@ public class KnowledgeBaseServiceImpl extends ServiceImpl<KnowledgeBaseMapper, K
     }
 
     @Override
-    public boolean deleteKnowledgeWithFiles(Long[] ids, Long userId, boolean isAdmin) {
+    @Async("fileProcessExecutor")
+    public void deleteKnowledgeWithFiles(Long[] ids, Long userId, boolean isAdmin) {
+        log.info("【异步删除】开始处理 {} 个知识库的删除请求，用户: {}", ids.length, userId);
+
+        // 1. 权限检查（先检查权限，避免无效操作）
+        List<Long> validIds = new ArrayList<>();
         for (Long id : ids) {
             KnowledgeBase knowledge = this.getById(id);
             if (knowledge == null) {
+                log.warn("知识库不存在，跳过: {}", id);
                 continue;
             }
-            
-            // 权限检查：管理员可以删除所有，普通用户只能删除自己的
             if (!isAdmin && !knowledge.getUserId().equals(userId)) {
-                log.warn("用户 {} 尝试删除不属于自己的知识库 {}", userId, id);
-                throw new ServiceException("无权删除该知识库");
+                log.warn("无权删除该知识库: {}, 用户: {}", id, userId);
+                continue;
             }
-            
-            // 删除OSS文件
-            if (knowledge.getFilePath() != null) {
-                try {
-                    ossUtils.deleteFile(knowledge.getFilePath());
-                    log.info("删除OSS文件成功: {}", knowledge.getFilePath());
-                } catch (Exception e) {
-                    log.error("删除OSS文件失败: {}", knowledge.getFilePath(), e);
-                }
-            }
-            
-            // 删除向量数据（调用已有的方法）
-            try {
-                documentProcessService.deleteKnowledgeVectors(id);
-                log.info("删除向量数据成功: {}", id);
-            } catch (Exception e) {
-                log.error("删除向量数据失败: {}", id, e);
-            }
+            validIds.add(id);
         }
-        
-        // 删除数据库记录
-        return this.removeBatchByIds(java.util.Arrays.asList(ids));
+
+        if (validIds.isEmpty()) {
+            log.info("【异步删除】没有有效的知识库需要删除");
+            return;
+        }
+
+        try {
+            // 2. 删除核心数据（向量 + BM25 + 数据库记录，带事务）
+            DeleteResult result = vectorStoreHelper.deleteKnowledgeData(validIds);
+
+            // 3. 只有核心数据删除成功后，才清理 OSS 文件
+            if (result.isAllSuccess()) {
+                int cleanedCount = vectorStoreHelper.cleanupOssFiles(validIds);
+                log.info("【异步删除】全部完成，成功删除 {} 个知识库，清理 {} 个OSS文件",
+                        validIds.size(), cleanedCount);
+            } else {
+                log.warn("【异步删除】部分知识库删除失败，跳过OSS清理，failedIds={}",
+                        result.getFailedKnowledgeIds());
+            }
+        } catch (Exception e) {
+            log.error("【异步删除】删除过程发生异常", e);
+        }
     }
 
     /**

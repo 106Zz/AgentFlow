@@ -56,11 +56,11 @@ public interface IKnowledgeBaseService extends IService<KnowledgeBase> {
 
     /**
      * 删除知识库（包括OSS文件和向量数据）
-     * 
+     * 异步执行，立即返回
+     *
      * @param ids 知识库ID数组
      * @param userId 当前用户ID
      * @param isAdmin 是否管理员
-     * @return 是否成功
      */
-    boolean deleteKnowledgeWithFiles(Long[] ids, Long userId, boolean isAdmin);
+    void deleteKnowledgeWithFiles(Long[] ids, Long userId, boolean isAdmin);
 }

@@ -83,8 +83,10 @@ public class KnowledgeBaseController extends BaseController {
     public AjaxResult remove(@PathVariable Long[] ids) {
         Long userId = SecurityUtils.getUserId();
         boolean isAdmin = SecurityUtils.isAdmin();
-        
-        return success(knowledgeBaseService.deleteKnowledgeWithFiles(ids, userId, isAdmin));
+
+        // 异步删除，立即返回
+        knowledgeBaseService.deleteKnowledgeWithFiles(ids, userId, isAdmin);
+        return success("删除任务已提交，后台处理中");
     }
 
     @Operation(summary = "重新处理并向量化")
