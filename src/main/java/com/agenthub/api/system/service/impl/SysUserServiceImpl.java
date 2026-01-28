@@ -32,10 +32,15 @@ public class SysUserServiceImpl extends ServiceImpl<SysUserMapper, SysUser> impl
         if (!checkUsernameUnique(user.getUsername())) {
             throw new ServiceException("注册用户'" + user.getUsername() + "'失败，用户名已存在");
         }
-        
+
+        // 如果密码为空，设置默认密码
+        if (StrUtil.isEmpty(user.getPassword())) {
+            user.setPassword("123456");
+        }
+
         // 加密密码
         user.setPassword(SecurityUtils.encryptPassword(user.getPassword()));
-        
+
         // 设置默认值
         if (StrUtil.isEmpty(user.getRole())) {
             user.setRole("user");
@@ -46,7 +51,7 @@ public class SysUserServiceImpl extends ServiceImpl<SysUserMapper, SysUser> impl
         if (StrUtil.isEmpty(user.getNickname())) {
             user.setNickname(user.getUsername());
         }
-        
+
         return this.save(user);
     }
 
@@ -65,6 +70,7 @@ public class SysUserServiceImpl extends ServiceImpl<SysUserMapper, SysUser> impl
 
     @Override
     public boolean checkUsernameUnique(String username) {
+        // MyBatis-Plus 的 @TableLogic 会自动过滤已删除记录
         return this.lambdaQuery()
                 .eq(SysUser::getUsername, username)
                 .count() == 0;

@@ -63,7 +63,13 @@ public class AuthController extends BaseController {
 
     @Operation(summary = "用户注册")
     @PostMapping("/register")
-    public AjaxResult register(@Valid @RequestBody SysUser user) {
+    public AjaxResult register(@RequestBody SysUser user) {
+        // 普通用户注册，默认角色为 user
+        user.setRole("user");
+        // 如果没有设置状态，默认为正常
+        if (user.getStatus() == null || user.getStatus().isEmpty()) {
+            user.setStatus("0");
+        }
         userService.registerUser(user);
         return success("注册成功");
     }
