@@ -1,5 +1,10 @@
 package com.agenthub.api.ai.utils;
 
+import com.agenthub.api.common.utils.OssUtils;
+import com.agenthub.api.knowledge.domain.DeleteResult;
+import com.agenthub.api.knowledge.domain.KnowledgeBase;
+import com.agenthub.api.knowledge.mapper.KnowledgeBaseMapper;
+import com.agenthub.api.search.mapper.VectorStoreDocMapper;
 import com.agenthub.api.search.service.IBm25IndexService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -28,7 +33,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
 import java.util.regex.Pattern;
 
 /**
@@ -51,6 +55,7 @@ import java.util.regex.Pattern;
  *   <li>v3.0 - Metadata null值防御</li>
  *   <li>v4.0 - 自生成UUID关联BM25索引</li>
  *   <li>v4.1 - 集成BM25索引服务</li>
+ *   <li>v4.2 - 向量删除改用直接SQL，移除DashScope API调用和重试逻辑</li>
  * </ul>
  */
 @Component
@@ -63,6 +68,9 @@ public class VectorStoreHelper {
     private final PgVectorStore vectorStore;
     private final QwenOcrDocumentReader ocrReader;
     private final IBm25IndexService bm25IndexService;
+    private final KnowledgeBaseMapper knowledgeBaseMapper;
+    private final VectorStoreDocMapper vectorStoreDocMapper;
+    private final OssUtils ossUtils;
 
     @Value("${ocr.trigger.min-length:30}")
     private int ocrMinLength;
@@ -410,53 +418,99 @@ public class VectorStoreHelper {
     // ==================== 删除方法 ====================
 
     /**
-     * 根据知识库ID删除所有数据（向量 + BM25索引）
+     * 批量删除知识库核心数据（向量 + BM25 + 数据库记录）
      *
-     * @param knowledgeId 知识库ID
+     * 删除顺序（在事务中执行）：
+     * 1. 批量删除向量数据（直接 SQL，不调用 DashScope API）
+     * 2. 批量删除 BM25 索引
+     * 3. 批量删除 knowledge_base 记录
+     *
+     * @param knowledgeIds 知识库ID列表
+     * @return 删除结果
+     */
+    public DeleteResult deleteKnowledgeData(List<Long> knowledgeIds) {
+        if (knowledgeIds == null || knowledgeIds.isEmpty()) {
+            return new DeleteResult(0, List.of(), List.of());
+        }
+
+        log.info("【删除知识库】开始删除 {} 个知识库的核心数据", knowledgeIds.size());
+
+        List<Long> failedIds = new ArrayList<>();
+        List<String> errors = new ArrayList<>();
+
+        try {
+            // 在事务中批量删除所有数据
+            int deletedCount = deleteDatabaseRecords(knowledgeIds);
+            log.info("【删除知识库】完成，成功删除 {} 个知识库", deletedCount);
+            return new DeleteResult(deletedCount, failedIds, errors);
+        } catch (Exception e) {
+            log.error("【删除知识库】删除失败", e);
+            failedIds.addAll(knowledgeIds);
+            errors.add(e.getMessage());
+            return new DeleteResult(0, failedIds, errors);
+        }
+    }
+
+    /**
+     * 在事务中删除数据库记录（向量 + BM25 索引 + knowledge_base 记录）
+     *
+     * @param knowledgeIds 知识库ID列表
      * @return 删除的记录数
      */
     @Transactional(rollbackFor = Exception.class)
-    public int deleteDocumentVectors(Long knowledgeId) {
-        try {
-            log.info("【删除向量】开始删除知识库 {} 的数据", knowledgeId);
+    protected int deleteDatabaseRecords(List<Long> knowledgeIds) {
+        // 1. 批量删除向量数据（直接 SQL，不调用 DashScope API）
+        int vectorDeleted = vectorStoreDocMapper.deleteByKnowledgeIds(knowledgeIds);
+        log.info("【删除知识库】向量数据批量删除成功，删除 {} 条", vectorDeleted);
 
-            // 1. 查询所有向量数据
-            List<Document> documents = vectorStore.similaritySearch(
-                    SearchRequest.builder()
-                            .query("delete-placeholder")
-                            .topK(9999)
-                            .filterExpression("knowledge_id == '%s'".formatted(knowledgeId.toString()))
-                            .build()
-            );
+        // 2. 批量删除 BM25 索引（一条 SQL）
+        bm25IndexService.deleteByKnowledgeIds(knowledgeIds);
+        log.info("【删除知识库】BM25 索引批量删除成功，删除 {} 个知识库", knowledgeIds.size());
 
-            if (documents.isEmpty()) {
-                log.warn("【删除向量】未找到知识库 {} 的数据", knowledgeId);
-                return 0;
-            }
+        // 3. 批量删除 knowledge_base 记录（一条 SQL）
+        int dbDeleted = knowledgeBaseMapper.deleteBatchIds(knowledgeIds);
+        log.info("【删除知识库】数据库记录批量删除成功，删除 {} 条", dbDeleted);
 
-            // 2. 提取ID列表
-            List<String> internalIds = documents.stream()
-                    .map(d -> (String) d.getMetadata().get("internal_id"))
-                    .toList();
+        // 4. 异步重建文档频率表（失败不影响删除结果）
+        bm25IndexService.asyncRebuildDocFreqAndStats();
 
-            List<String> vectorStoreIds = documents.stream()
-                    .map(Document::getId)
-                    .toList();
+        return dbDeleted;
+    }
 
-            // 3. 删除BM25索引
-            bm25IndexService.deleteByKnowledgeId(knowledgeId);
-
-            // 4. 删除向量数据
-            if (!vectorStoreIds.isEmpty()) {
-                vectorStore.delete(vectorStoreIds);
-            }
-
-            log.info("【删除向量】完成，删除 {} 条记录", vectorStoreIds.size());
-            return vectorStoreIds.size();
-        } catch (Exception e) {
-            log.error("【删除向量】删除失败，事务回滚: knowledgeId={}", knowledgeId, e);
-            throw e;  // 触发回滚
+    /**
+     * 清理 OSS 文件（可异步调用，失败不影响核心业务）
+     *
+     * @param knowledgeIds 知识库ID列表
+     * @return 成功删除的文件数
+     */
+    public int cleanupOssFiles(List<Long> knowledgeIds) {
+        if (knowledgeIds == null || knowledgeIds.isEmpty()) {
+            return 0;
         }
+
+        log.info("【清理OSS】开始清理 {} 个知识库的文件", knowledgeIds.size());
+        int cleanedCount = 0;
+
+        for (Long knowledgeId : knowledgeIds) {
+            try {
+                // 注意：此时记录可能已被软删除，需要直接查询数据库
+                KnowledgeBase knowledge = knowledgeBaseMapper.selectById(knowledgeId);
+                if (knowledge == null) {
+                    log.debug("【清理OSS】知识库不存在，跳过: {}", knowledgeId);
+                    continue;
+                }
+
+                if (knowledge.getFilePath() != null) {
+                    ossUtils.deleteFile(knowledge.getFilePath());
+                    cleanedCount++;
+                    log.info("【清理OSS】文件删除成功: {}", knowledge.getFilePath());
+                }
+            } catch (Exception e) {
+                log.error("【清理OSS】文件删除失败，knowledgeId={}", knowledgeId, e);
+            }
+        }
+
+        return cleanedCount;
     }
 
     // ==================== 检索方法 ====================

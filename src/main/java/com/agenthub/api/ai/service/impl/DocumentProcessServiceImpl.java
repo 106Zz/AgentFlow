@@ -118,16 +118,25 @@ public class DocumentProcessServiceImpl {
     @Async("fileProcessExecutor")
     public void batchProcessKnowledge(Long[] knowledgeIds) {
         log.info("【批量处理】开始处理 {} 个知识库", knowledgeIds.length);
-        
+
         for (Long knowledgeId : knowledgeIds) {
             processKnowledgeAsync(knowledgeId);
         }
     }
 
     /**
-     * 删除知识库的向量数据
+     * 异步执行 OSS 清理任务
+     * 使用与文件处理相同的线程池，避免创建过多线程
+     *
+     * @param cleanupTask 清理任务（Runnable）
      */
-    public int deleteKnowledgeVectors(Long knowledgeId) {
-        return vectorStoreHelper.deleteDocumentVectors(knowledgeId);
+    @Async("fileProcessExecutor")
+    public void executeOssCleanup(Runnable cleanupTask) {
+        log.debug("【OSS清理】开始异步清理任务");
+        try {
+            cleanupTask.run();
+        } catch (Exception e) {
+            log.error("【OSS清理】异步清理任务执行失败", e);
+        }
     }
 }

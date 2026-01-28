@@ -34,11 +34,24 @@ public interface IBm25IndexService extends IService<Bm25Index> {
   void deleteByKnowledgeId(Long knowledgeId);
 
   /**
+   * 批量删除多个知识库的BM25索引（在单个事务中完成）
+   *
+   * @param knowledgeIds 知识库ID列表
+   */
+  void deleteByKnowledgeIds(List<Long> knowledgeIds);
+
+  /**
    * 获取全局统计
    *
    * @return [总文档数, 平均文档长度]
    */
   long[] getGlobalStats();
+
+  /**
+   * 异步重建文档频率表和更新全局统计
+   * 在删除操作完成后调用，失败不影响删除结果
+   */
+  void asyncRebuildDocFreqAndStats();
 
   /**
    * 批量索引文档（同步，在单个事务内完成）

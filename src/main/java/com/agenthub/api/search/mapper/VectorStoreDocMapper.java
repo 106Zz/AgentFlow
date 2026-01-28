@@ -10,7 +10,7 @@ import java.util.List;
 /**
  * Vector Store 文档 Mapper
  * <p>
- * 用于批量查询 vector_store 表，优化 BM25 检索性能
+ * 用于直接操作 vector_store 表，避免通过 PgVectorStore API
  * </p>
  */
 @Mapper
@@ -23,4 +23,12 @@ public interface VectorStoreDocMapper extends BaseMapper<VectorStoreDoc> {
      * @return 文档列表
      */
     List<VectorStoreDoc> selectByIds(@Param("ids") List<String> ids);
+
+    /**
+     * 根据 knowledge_id 批量删除向量记录（直接 SQL，不调用 DashScope API）
+     *
+     * @param knowledgeIds 知识库ID列表
+     * @return 删除的记录数
+     */
+    int deleteByKnowledgeIds(@Param("knowledgeIds") List<Long> knowledgeIds);
 }

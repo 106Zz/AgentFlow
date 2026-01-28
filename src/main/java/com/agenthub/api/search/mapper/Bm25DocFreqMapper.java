@@ -2,6 +2,7 @@ package com.agenthub.api.search.mapper;
 
 
 import com.agenthub.api.search.domain.Bm25DocFreq;
+import com.baomidou.mybatisplus.annotation.InterceptorIgnore;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
@@ -15,7 +16,9 @@ public interface Bm25DocFreqMapper extends BaseMapper<Bm25DocFreq> {
      * 从 term_freq 表重建 doc_freq 表
      *
      * <p>先清空 doc_freq，然后从 term_freq 重新聚合统计</p>
+     * <p>注意：此方法包含 TRUNCATE + INSERT 混合语句，需要忽略 MyBatis-Plus 拦截器</p>
      */
+    @InterceptorIgnore(blockAttack = "true")
     void rebuildFromTermFreq();
 
     /**

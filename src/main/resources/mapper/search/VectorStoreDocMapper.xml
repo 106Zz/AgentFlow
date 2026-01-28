@@ -18,4 +18,18 @@
         )
     </select>
 
+    <!--
+        根据 knowledge_id 批量删除向量记录
+        直接 SQL 删除，不调用 DashScope API
+        注意：metadata->>'knowledge_id' 返回 text 类型，需要将参数转为 text 比较
+    -->
+    <delete id="deleteByKnowledgeIds">
+        DELETE FROM vector_store
+        WHERE metadata->>'knowledge_id' = ANY(
+        <foreach collection="knowledgeIds" item="id" open="ARRAY[" separator="," close="]">
+            CAST(#{id} AS VARCHAR)
+        </foreach>
+        )
+    </delete>
+
 </mapper>

@@ -16,6 +16,7 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.document.Document;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -171,6 +172,68 @@ public class Bm25IndexServiceImpl extends ServiceImpl<Bm25IndexMapper, Bm25Index
     log.info("【BM25索引】批量删除完成，删除 {} 个文档", internalIds.size());
 
 
+  }
+
+  @Override
+  @Transactional(rollbackFor = Exception.class)
+  public void deleteByKnowledgeIds(List<Long> knowledgeIds) {
+    if (knowledgeIds == null || knowledgeIds.isEmpty()) {
+      return;
+    }
+
+    log.info("【BM25索引】批量删除 {} 个知识库的索引", knowledgeIds.size());
+
+    // 1. 查询所有相关的索引记录
+    List<Bm25Index> indexes = indexMapper.selectList(
+            new LambdaQueryWrapper<Bm25Index>()
+                    .in(Bm25Index::getKnowledgeId, knowledgeIds)
+    );
+
+    if (indexes.isEmpty()) {
+      log.info("【BM25索引】没有找到需要删除的索引");
+      return;
+    }
+
+    // 2. 提取所有 internalId
+    List<String> internalIds = indexes.stream()
+            .map(Bm25Index::getInternalId)
+            .collect(Collectors.toList());
+
+    // 3. 批量删除词频记录（一条 SQL）
+    int termFreqDeleted = termFreqMapper.delete(
+            new LambdaQueryWrapper<Bm25TermFreq>()
+                    .in(Bm25TermFreq::getDocId, internalIds)
+    );
+
+    // 4. 批量删除索引记录（一条 SQL）
+    int indexDeleted = indexMapper.delete(
+            new LambdaQueryWrapper<Bm25Index>()
+                    .in(Bm25Index::getKnowledgeId, knowledgeIds)
+    );
+
+    log.info("【BM25索引】批量删除完成，删除 {} 个索引，{} 条词频", indexDeleted, termFreqDeleted);
+  }
+
+  /**
+   * 异步重建文档频率表和更新统计
+   * 在核心删除操作完成后调用，失败不影响删除结果
+   */
+  @Async("fileProcessExecutor")
+  public void asyncRebuildDocFreqAndStats() {
+    try {
+      log.info("【BM25索引】开始异步重建文档频率表");
+      docFreqMapper.rebuildFromTermFreq();
+      log.info("【BM25索引】文档频率表重建成功");
+    } catch (Exception e) {
+      log.error("【BM25索引】文档频率表重建失败，下次索引时会自动恢复: {}", e.getMessage(), e);
+    }
+
+    try {
+      updateGlobalStats();
+      log.info("【BM25索引】全局统计更新成功");
+    } catch (Exception e) {
+      log.error("【BM25索引】全局统计更新失败: {}", e.getMessage(), e);
+    }
   }
 
   @Override
