@@ -7,5 +7,4 @@ import com.baomidou.mybatisplus.core.mapper.BaseMapper;
  * 用户表 数据层
  */
 public interface SysUserMapper extends BaseMapper<SysUser> {
-
 }

@@ -2,10 +2,12 @@ package com.agenthub.api.system.domain;
 
 
 import com.agenthub.api.common.base.BaseEntity;
+import com.agenthub.api.common.validation.ValidationGroups;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
 import jakarta.validation.constraints.Email;
@@ -69,9 +71,10 @@ public class SysUser extends BaseEntity {
 
     /**
      * 密码
+     * WRITE_ONLY: 只在反序列化时接收（新增/修改），序列化时忽略（查询不返回密码）
      */
-    @JsonIgnore
-    @NotBlank(message = "密码不能为空")
+    @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
+    @NotBlank(groups = {ValidationGroups.Create.class}, message = "密码不能为空")
     @Size(min = 5, max = 100, message = "密码长度不能少于5个字符")
     private String password;
 
