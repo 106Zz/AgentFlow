@@ -40,9 +40,13 @@ public class TokenService {
                 Long userId = claims.get(Constants.JWT_USERID, Long.class);
                 String username = claims.get(Constants.JWT_USERNAME, String.class);
                 
+                // Fix: Extract roles from token
+                java.util.List<String> roles = claims.get("roles", java.util.List.class);
+
                 LoginUser user = new LoginUser();
                 user.setUserId(userId);
                 user.setUsername(username);
+                user.setRoles(roles); // Set roles
                 user.setToken(token);
                 user.setLoginTime(System.currentTimeMillis());
                 user.setExpireTime(user.getLoginTime() + expireTime * MILLIS_MINUTE);
@@ -67,16 +71,20 @@ public class TokenService {
     }
 
     public String createToken(LoginUser loginUser) {
-        String token = createToken(loginUser.getUserId(), loginUser.getUsername());
+        // Fix: Pass roles to createToken
+        String token = createToken(loginUser.getUserId(), loginUser.getUsername(), loginUser.getRoles());
         loginUser.setToken(token);
         return token;
     }
 
-    private String createToken(Long userId, String username) {
+    private String createToken(Long userId, String username, java.util.List<String> roles) {
         Map<String, Object> claims = new HashMap<>();
         claims.put(Constants.LOGIN_USER_KEY, "user_" + userId);
         claims.put(Constants.JWT_USERID, userId);
         claims.put(Constants.JWT_USERNAME, username);
+        if (roles != null) {
+            claims.put("roles", roles); // Store roles
+        }
         return createToken(claims);
     }
 

@@ -25,7 +25,7 @@ public class SysUserController extends BaseController {
     private ISysUserService userService;
 
     @Operation(summary = "获取用户列表")
-    @PreAuthorize("hasRole('ROLE_admin')")
+    @PreAuthorize("hasRole('admin')")
     @GetMapping("/list")
     public AjaxResult list(SysUser user, PageQuery pageQuery) {
         PageResult<SysUser> page = userService.selectUserPage(user, pageQuery);
@@ -33,21 +33,18 @@ public class SysUserController extends BaseController {
     }
 
     @Operation(summary = "根据用户ID获取详细信息")
-    @PreAuthorize("hasRole('ROLE_admin')")
+    @PreAuthorize("hasRole('admin')")
     @GetMapping("/{userId}")
     public AjaxResult getInfo(@PathVariable Long userId) {
         return success(userService.getById(userId));
     }
 
     @Operation(summary = "新增用户")
-    @PreAuthorize("hasRole('ROLE_admin')")
+    @PreAuthorize("hasRole('admin')")
     @PostMapping
     public AjaxResult add(@RequestBody SysUser user) {
         if (!userService.checkUsernameUnique(user.getUsername())) {
             return error("新增用户'" + user.getUsername() + "'失败，用户名已存在");
-        }
-        if (!userService.checkPhoneUnique(user.getPhonenumber())) {
-            return error("新增用户'" + user.getUsername() + "'失败，手机号码已存在");
         }
         if (!userService.checkEmailUnique(user.getEmail())) {
             return error("新增用户'" + user.getUsername() + "'失败，邮箱账号已存在");
@@ -56,14 +53,14 @@ public class SysUserController extends BaseController {
     }
 
     @Operation(summary = "修改用户")
-    @PreAuthorize("hasRole('ROLE_admin')")
+    @PreAuthorize("hasRole('admin')")
     @PutMapping
     public AjaxResult edit(@RequestBody SysUser user) {
         return success(userService.updateById(user));
     }
 
     @Operation(summary = "删除用户")
-    @PreAuthorize("hasRole('ROLE_admin')")
+    @PreAuthorize("hasRole('admin')")
     @DeleteMapping("/{userIds}")
     public AjaxResult remove(@PathVariable Long[] userIds) {
         return success(userService.removeBatchByIds(java.util.Arrays.asList(userIds)));
