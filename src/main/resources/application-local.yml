@@ -61,7 +61,22 @@ spring:
           min-idle: 5
           max-wait: 2000ms
         shutdown-timeout: 100ms
-  
+
+  # RabbitMQ 配置
+  rabbitmq:
+    host: 124.70.190.134
+    port: 5672
+    username: agenthub
+    password: agenthub..123
+    virtual-host: /agenthub
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    listener:
+      simple:
+        acknowledge-mode: manual
+        prefetch: 1
+    connection-timeout: 15000
+
   # Spring AI DashScope 配置
   ai:
     dashscope:

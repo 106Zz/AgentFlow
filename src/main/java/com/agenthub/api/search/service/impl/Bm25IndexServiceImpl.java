@@ -1,6 +1,8 @@
 package com.agenthub.api.search.service.impl;
 
 
+import com.agenthub.api.mq.domain.Bm25RetryMessage;
+import com.agenthub.api.mq.producer.Bm25RetryProducer;
 import com.agenthub.api.search.domain.Bm25DocFreq;
 import com.agenthub.api.search.domain.Bm25Index;
 import com.agenthub.api.search.domain.Bm25Stats;
@@ -33,6 +35,7 @@ public class Bm25IndexServiceImpl extends ServiceImpl<Bm25IndexMapper, Bm25Index
   private final Bm25DocFreqMapper docFreqMapper;
   private final Bm25StatsMapper statsMapper;
   private final ChineseTokenizer tokenizer;
+  private final Bm25RetryProducer bm25RetryProducer;
 
 
   @Override
@@ -217,6 +220,7 @@ public class Bm25IndexServiceImpl extends ServiceImpl<Bm25IndexMapper, Bm25Index
   /**
    * 异步重建文档频率表和更新统计
    * 在核心删除操作完成后调用，失败不影响删除结果
+   * 失败后发送到 RabbitMQ 进行重试
    */
   @Async("fileProcessExecutor")
   public void asyncRebuildDocFreqAndStats() {
@@ -225,14 +229,29 @@ public class Bm25IndexServiceImpl extends ServiceImpl<Bm25IndexMapper, Bm25Index
       docFreqMapper.rebuildFromTermFreq();
       log.info("【BM25索引】文档频率表重建成功");
     } catch (Exception e) {
-      log.error("【BM25索引】文档频率表重建失败，下次索引时会自动恢复: {}", e.getMessage(), e);
+      log.error("【BM25索引】文档频率表重建失败，发送重试消息: {}", e.getMessage(), e);
+      // 发送延迟重试消息到 RabbitMQ（延迟 1 分钟）
+      Bm25RetryMessage message = Bm25RetryMessage.builder()
+              .retryCount(0)
+              .errorMessage(e.getMessage())
+              .timestamp(System.currentTimeMillis())
+              .build();
+      bm25RetryProducer.sendRetryMessage(message, 60 * 1000L);
+      return;  // 失败后不继续执行
     }
 
     try {
       updateGlobalStats();
       log.info("【BM25索引】全局统计更新成功");
     } catch (Exception e) {
-      log.error("【BM25索引】全局统计更新失败: {}", e.getMessage(), e);
+      log.error("【BM25索引】全局统计更新失败，发送重试消息: {}", e.getMessage(), e);
+      // 发送延迟重试消息到 RabbitMQ（延迟 1 分钟）
+      Bm25RetryMessage message = Bm25RetryMessage.builder()
+              .retryCount(0)
+              .errorMessage("updateGlobalStats: " + e.getMessage())
+              .timestamp(System.currentTimeMillis())
+              .build();
+      bm25RetryProducer.sendRetryMessage(message, 60 * 1000L);
     }
   }
 
