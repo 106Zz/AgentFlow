@@ -152,7 +152,7 @@ public class KnowledgeBaseServiceImpl extends ServiceImpl<KnowledgeBaseMapper, K
             }
         }
 
-        // 批量异步处理
+        // 批量处理
         if (!ids.isEmpty()) {
             documentProcessService.batchProcessKnowledge(ids.toArray(new Long[0]));
         }

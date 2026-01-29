@@ -56,14 +56,15 @@ public class DocProcessRetryConsumer {
       // 执行文档处理（复用核心逻辑）
       int vectorCount = documentProcessService.processDocumentCore(knowledge);
 
-      // 更新状态为已完成
-      knowledge.setVectorStatus("2");
-      knowledge.setVectorCount(vectorCount);
-      knowledgeBaseService.updateById(knowledge);
+      // 更新状态为已完成（带重试）
+      updateStatusWithRetry(knowledge, "2", vectorCount);
       statusNotifier.notifyCompleted(knowledge.getUserId(), knowledge.getId(), vectorCount);
 
       // 成功后 ACK
       channel.basicAck(deliveryTag, false);
+
+      log.info("【RabbitMQ】文档处理重试成功，知识库ID: {}, 向量数量: {}",
+          message.getKnowledgeId(), vectorCount);
 
     } catch (Exception e) {
       log.error("【RabbitMQ】文档处理重试失败: {}", e.getMessage(), e);
@@ -76,10 +77,18 @@ public class DocProcessRetryConsumer {
           producer.sendRetryMessage(nextMessage, delayMillis);
         } else {
           producer.sendToDeadLetterQueue(nextMessage);
-          // 更新状态为失败
-          knowledge.setVectorStatus("3");
-          knowledge.setRemark("处理失败（已重试 " + message.getRetryCount() + " 次）: " + e.getMessage());
-          knowledgeBaseService.updateById(knowledge);
+
+          // 更新状态为失败（带重试）
+          updateStatusWithRetry(knowledge, "3", null);
+
+          // 单独更新 remark
+          try {
+            knowledge.setRemark("处理失败（已重试 " + message.getRetryCount() + " 次）: " + e.getMessage());
+            knowledgeBaseService.updateById(knowledge);
+          } catch (Exception remarkEx) {
+            log.warn("【remark更新失败】知识库 ID: {}", knowledge.getId(), remarkEx);
+          }
+
           statusNotifier.notifyFailed(message.getUserId(), message.getKnowledgeId(), e.getMessage());
         }
 
@@ -146,5 +155,61 @@ public class DocProcessRetryConsumer {
       case 2 -> 2 * 60 * 1000L;   // 2分钟
       default -> 5 * 60 * 1000L;   // 5分钟
     };
+  }
+
+  /**
+   * 更新知识库状态（带重试机制）
+   */
+  private void updateStatusWithRetry(KnowledgeBase knowledge, String status, Integer vectorCount) {
+    int maxRetries = 3;
+    int attempt = 0;
+    boolean success = false;
+
+    while (attempt < maxRetries && !success) {
+      try {
+        attempt++;
+        knowledge.setVectorStatus(status);
+        if (vectorCount != null) {
+          knowledge.setVectorCount(vectorCount);
+        }
+
+        knowledgeBaseService.updateById(knowledge);
+        success = true;
+        log.debug("【状态更新成功】知识库 ID: {}, 状态: {}, 尝试次数: {}",
+            knowledge.getId(), status, attempt);
+
+      } catch (Exception e) {
+        log.warn("【状态更新失败】知识库 ID: {}, 状态: {}, 尝试: {}/{}, 错误: {}",
+            knowledge.getId(), status, attempt, maxRetries, e.getMessage());
+
+        if (attempt >= maxRetries) {
+          log.error("【状态更新最终失败】知识库 ID: {}, 状态: {}, 已重试 {} 次",
+              knowledge.getId(), status, maxRetries);
+          // 最后一次尝试：使用新的 session 继续重试
+          try {
+            KnowledgeBase latest = knowledgeBaseService.getById(knowledge.getId());
+            if (latest != null) {
+              latest.setVectorStatus(status);
+              if (vectorCount != null) {
+                latest.setVectorCount(vectorCount);
+              }
+              knowledgeBaseService.updateById(latest);
+              log.info("【状态更新最终成功】知识库 ID: {}, 状态: {} (使用新 session)",
+                  knowledge.getId(), status);
+              success = true;
+            }
+          } catch (Exception finalEx) {
+            log.error("【状态更新彻底失败】知识库 ID: {}, 无法更新状态", knowledge.getId(), finalEx);
+          }
+        } else {
+          try {
+            Thread.sleep(100 * attempt);
+          } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            break;
+          }
+        }
+      }
+    }
   }
 }

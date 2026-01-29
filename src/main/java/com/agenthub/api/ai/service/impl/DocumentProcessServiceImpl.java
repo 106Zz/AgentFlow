@@ -83,14 +83,14 @@ public class DocumentProcessServiceImpl {
 
     try {
       // 更新状态为处理中 + 推送
-      updateStatus(knowledge, "1", null);
+      updateStatusWithRetry(knowledge, "1", null);
       statusNotifier.notifyProcessing(knowledge.getUserId(), knowledgeId);
 
       // 执行文档处理（调用公共方法）
       int vectorCount = processDocumentCore(knowledge);
 
-      // 更新状态为已完成 + 推送
-      updateStatus(knowledge, "2", vectorCount);
+      // 更新状态为已完成 + 推送（带重试）
+      updateStatusWithRetry(knowledge, "2", vectorCount);
       statusNotifier.notifyCompleted(knowledge.getUserId(), knowledgeId, vectorCount);
 
       log.info("【处理完成】知识库 ID: {}, 向量数量: {}", knowledgeId, vectorCount);
@@ -98,10 +98,17 @@ public class DocumentProcessServiceImpl {
     } catch (Exception e) {
       log.error("【处理失败】知识库 ID: {}", knowledgeId, e);
 
-      // 更新状态为失败 + 推送
-      updateStatus(knowledge, "3", null);
-      knowledge.setRemark("处理失败: " + e.getMessage());
-      knowledgeBaseService.updateById(knowledge);
+      // 更新状态为失败 + 推送（带重试）
+      updateStatusWithRetry(knowledge, "3", null);
+
+      // 单独更新 remark（避免影响状态更新）
+      try {
+        knowledge.setRemark("处理失败（已重试 0 次）: " + e.getMessage());
+        knowledgeBaseService.updateById(knowledge);
+      } catch (Exception remarkEx) {
+        log.warn("【remark更新失败】知识库 ID: {}", knowledgeId, remarkEx);
+      }
+
       statusNotifier.notifyFailed(knowledge.getUserId(), knowledgeId, e.getMessage());
 
       // 发送 MQ 重试消息（延迟 30 秒）
@@ -110,11 +117,10 @@ public class DocumentProcessServiceImpl {
   }
 
   /**
-   * 批量异步处理
+   * 批量处理
    *
    * @param knowledgeIds 知识库ID数组
    */
-  @Async("fileProcessExecutor")
   public void batchProcessKnowledge(Long[] knowledgeIds) {
     log.info("【批量处理】开始处理 {} 个知识库", knowledgeIds.length);
 
@@ -240,6 +246,65 @@ public class DocumentProcessServiceImpl {
       knowledge.setVectorCount(vectorCount);
     }
     knowledgeBaseService.updateById(knowledge);
+  }
+
+  /**
+   * 更新知识库状态（带重试机制）
+   * 确保状态更新不会因为临时网络问题而失败
+   */
+  private void updateStatusWithRetry(KnowledgeBase knowledge, String status, Integer vectorCount) {
+    int maxRetries = 3;
+    int attempt = 0;
+    boolean success = false;
+
+    while (attempt < maxRetries && !success) {
+      try {
+        attempt++;
+        knowledge.setVectorStatus(status);
+        if (vectorCount != null) {
+          knowledge.setVectorCount(vectorCount);
+        }
+
+        knowledgeBaseService.updateById(knowledge);
+        success = true;
+        log.debug("【状态更新成功】知识库 ID: {}, 状态: {}, 尝试次数: {}",
+            knowledge.getId(), status, attempt);
+
+      } catch (Exception e) {
+        log.warn("【状态更新失败】知识库 ID: {}, 状态: {}, 尝试: {}/{}, 错误: {}",
+            knowledge.getId(), status, attempt, maxRetries, e.getMessage());
+
+        if (attempt >= maxRetries) {
+          log.error("【状态更新最终失败】知识库 ID: {}, 状态: {}, 已重试 {} 次",
+              knowledge.getId(), status, maxRetries);
+          // 最后一次尝试：使用新的 session 绕续重试
+          try {
+            // 重新获取最新的 knowledge 对象
+            KnowledgeBase latest = knowledgeBaseService.getById(knowledge.getId());
+            if (latest != null) {
+              latest.setVectorStatus(status);
+              if (vectorCount != null) {
+                latest.setVectorCount(vectorCount);
+              }
+              knowledgeBaseService.updateById(latest);
+              log.info("【状态更新最终成功】知识库 ID: {}, 状态: {} (使用新 session)",
+                  knowledge.getId(), status);
+              success = true;
+            }
+          } catch (Exception finalEx) {
+            log.error("【状态更新彻底失败】知识库 ID: {}, 无法更新状态", knowledge.getId(), finalEx);
+          }
+        } else {
+          // 等待后重试
+          try {
+            Thread.sleep(100 * attempt);
+          } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            break;
+          }
+        }
+      }
+    }
   }
 
   /**
