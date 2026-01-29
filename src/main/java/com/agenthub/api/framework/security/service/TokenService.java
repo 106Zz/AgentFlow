@@ -104,11 +104,30 @@ public class TokenService {
     }
 
     private String getToken(HttpServletRequest request) {
+        // 1. 优先从请求头获取
         String token = request.getHeader(Constants.TOKEN);
         if (StrUtil.isNotEmpty(token) && token.startsWith(Constants.TOKEN_PREFIX)) {
             token = token.replace(Constants.TOKEN_PREFIX, "");
+            return token;
         }
-        return token;
+
+        // 2. 从 Cookie 获取（用于 SSE 等不支持自定义头的场景）
+        jakarta.servlet.http.Cookie[] cookies = request.getCookies();
+        if (cookies != null) {
+            for (jakarta.servlet.http.Cookie cookie : cookies) {
+                if ("auth_token".equals(cookie.getName())) {
+                    return cookie.getValue();
+                }
+            }
+        }
+
+        // 3. 从 URL 参数获取（SSE 备用方案）
+        token = request.getParameter("token");
+        if (StrUtil.isNotEmpty(token)) {
+            return token;
+        }
+
+        return null;
     }
 
     private SecretKey getSecretKey() {

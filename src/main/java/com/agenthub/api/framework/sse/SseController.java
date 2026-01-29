@@ -1,5 +1,6 @@
 package com.agenthub.api.framework.sse;
 
+import com.agenthub.api.common.utils.SecurityUtils;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -40,8 +41,6 @@ public class SseController {
   }
 
   private Long getCurrentUserId() {
-    // TODO: 从 SecurityContext 获取当前用户 ID
-    // 暂时返回 1，实际使用时需要修改
-    return 1L;
+    return SecurityUtils.getUserId();
   }
 }

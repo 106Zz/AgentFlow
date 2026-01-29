@@ -63,4 +63,5 @@ public interface IKnowledgeBaseService extends IService<KnowledgeBase> {
      * @param isAdmin 是否管理员
      */
     void deleteKnowledgeWithFiles(Long[] ids, Long userId, boolean isAdmin);
+
 }

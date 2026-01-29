@@ -104,6 +104,12 @@ public class SseEmitterService {
 
   /**
    * 推送知识库状态变化
+   * <p>
+   * 根据 status 映射为前端期望的消息类型：
+   * - "1" (处理中) -> "processing"
+   * - "2" (已完成) -> "completed" (附带 vectorCount)
+   * - "3" (失败) -> "failed"
+   * </p>
    *
    * @param userId      用户ID
    * @param knowledgeId 知识库ID
@@ -111,11 +117,20 @@ public class SseEmitterService {
    * @param vectorCount 向量数量
    */
   public void pushKnowledgeStatus(Long userId, Long knowledgeId, String status, Integer vectorCount) {
+    String messageType = switch (status) {
+      case "1" -> "processing";
+      case "2" -> "completed";
+      case "3" -> "failed";
+      default -> null; // 状态 "0" 不发送通知
+    };
+
+    if (messageType == null) {
+      return;
+    }
+
     sendMessage(userId, Map.of(
-            "type", "knowledge_status",
+            "type", messageType,
             "knowledgeId", knowledgeId,
-            "status", status,
-            "statusText", getStatusText(status),
             "vectorCount", vectorCount != null ? vectorCount : 0,
             "timestamp", System.currentTimeMillis()
     ));
@@ -132,19 +147,6 @@ public class SseEmitterService {
         userEmitters.remove(userId);
       }
     }
-  }
-
-  /**
-   * 获取状态文本
-   */
-  private String getStatusText(String status) {
-    return switch (status) {
-      case "0" -> "未处理";
-      case "1" -> "处理中";
-      case "2" -> "已完成";
-      case "3" -> "处理失败";
-      default -> "未知";
-    };
   }
 
   /**
