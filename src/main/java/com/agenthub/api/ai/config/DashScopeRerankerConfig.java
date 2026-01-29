@@ -50,19 +50,20 @@ public class DashScopeRerankerConfig {
         log.info("开始 Rerank：候选文档 {} 个，取 top{}", documents.size(), topN);
         long startTime = System.currentTimeMillis();
 
-        // 构建请求体
-        JSONObject requestBody = buildRequest(query, documents, topN);
-
-        //发送http请求
-        String responseStr = HttpRequest.post(RERANK_URL)
-                .header("Authorization", "Bearer " + apiKey)
-                .header("Content-Type", "application/json")
-                .body(requestBody.toString())
-                .timeout(10000)  // 10秒超时
-                .execute()
-                .body();
-
         try {
+            // 构建请求体
+            JSONObject requestBody = buildRequest(query, documents, topN);
+
+            // v4.3 修复：把 HTTP 请求放到 try 块内，捕获网络异常
+            //发送http请求
+            String responseStr = HttpRequest.post(RERANK_URL)
+                    .header("Authorization", "Bearer " + apiKey)
+                    .header("Content-Type", "application/json")
+                    .body(requestBody.toString())
+                    .timeout(10000)  // 10秒超时
+                    .execute()
+                    .body();
+
             //解析响应
             JSONObject response = JSONUtil.parseObj(responseStr);
 
@@ -117,7 +118,7 @@ public class DashScopeRerankerConfig {
 
             return reranked;
         } catch (Exception e) {
-            log.error("Rerank 调用异常，返回原始结果", e);
+            log.error("Rerank 调用异常，返回原始结果。异常类型: {}", e.getClass().getSimpleName(), e);
             log.warn("降级处理：返回向量检索的前 {} 个结果（未重排序）", topN);
             return fallbackToOriginal(documents, topN);
         }
