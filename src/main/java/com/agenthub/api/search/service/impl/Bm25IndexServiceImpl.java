@@ -24,6 +24,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.*;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 @Slf4j
 @Service
@@ -268,6 +269,7 @@ public class Bm25IndexServiceImpl extends ServiceImpl<Bm25IndexMapper, Bm25Index
 
   /**
    * 批量索引文档（同步，在单个事务内完成）
+   * v4.3 优化：使用并行流 + 批量分词
    *
    * @param docs 文档列表
    * @param knowledgeId 知识库ID
@@ -282,21 +284,26 @@ public class Bm25IndexServiceImpl extends ServiceImpl<Bm25IndexMapper, Bm25Index
 
     log.debug("【BM25索引】批量索引 {} 个文档", docs.size());
 
-    List<Bm25Index> indexList = new ArrayList<>();
-    List<Bm25TermFreq> termFreqList = new ArrayList<>();
+    // v4.3 - 预处理：提取所有内容，使用批量分词（并行处理）
+    List<String> contents = docs.stream()
+            .map(Document::getText)
+            .collect(Collectors.toList());
 
-    // 收集所有需要批量处理的数据
-    for (Document doc : docs) {
+    // v4.3 - 使用并行批量分词，充分利用多核 CPU
+    List<List<String>> allTokens = tokenizer.tokenizeBatchList(contents);
+
+    // v4.3 - 使用并行流处理数据准备
+    List<IndexData> indexDataList = new ArrayList<>();
+    IntStream.range(0, docs.size()).parallel().forEach(i -> {
+      Document doc = docs.get(i);
       String internalId = (String) doc.getMetadata().get("internal_id");
-      String content = doc.getText();
+      List<String> tokens = allTokens.get(i);
 
-      // 分词
-      List<String> tokens = tokenizer.tokenize(content);
       if (tokens.isEmpty()) {
-        continue;
+        return;
       }
 
-      // 1. 准备索引数据
+      // 准备索引数据
       Bm25Index index = new Bm25Index();
       index.setInternalId(internalId);
       index.setKnowledgeId(knowledgeId);
@@ -304,9 +311,9 @@ public class Bm25IndexServiceImpl extends ServiceImpl<Bm25IndexMapper, Bm25Index
       index.setTokens(String.join(",", tokens));
       index.setTokenCount(tokens.size());
       index.setDelFlag(0);
-      indexList.add(index);
 
-      // 2. 准备词频数据（统计每个词在当前文档中的频率）
+      // 准备词频数据（统计每个词在当前文档中的频率）
+      List<Bm25TermFreq> termFreqs = new ArrayList<>();
       Map<String, Integer> freqMap = new HashMap<>();
       for (String token : tokens) {
         freqMap.merge(token, 1, Integer::sum);
@@ -317,8 +324,20 @@ public class Bm25IndexServiceImpl extends ServiceImpl<Bm25IndexMapper, Bm25Index
         tf.setTerm(entry.getKey());
         tf.setDocId(internalId);
         tf.setFrequency(entry.getValue());
-        termFreqList.add(tf);
+        termFreqs.add(tf);
       }
+
+      synchronized (indexDataList) {
+        indexDataList.add(new IndexData(index, termFreqs));
+      }
+    });
+
+    // 分离数据
+    List<Bm25Index> indexList = new ArrayList<>();
+    List<Bm25TermFreq> termFreqList = new ArrayList<>();
+    for (IndexData data : indexDataList) {
+      indexList.add(data.index);
+      termFreqList.addAll(data.termFreqs);
     }
 
     // 批量操作（在同一个事务内）
@@ -400,6 +419,7 @@ public class Bm25IndexServiceImpl extends ServiceImpl<Bm25IndexMapper, Bm25Index
 
   /**
    * 更新文档频率
+   * v4.3 - 优化：使用批量 GROUP BY 查询替代 N+1 查询
    * <p>
    * 修复：原代码使用 updateById 无法插入新记录，导致 bm25_doc_freq 表为空
    * 解决方案：先尝试更新，如果影响行数为0则改用 insert
@@ -410,19 +430,25 @@ public class Bm25IndexServiceImpl extends ServiceImpl<Bm25IndexMapper, Bm25Index
     }
 
     Set<String> uniqueTerms = new HashSet<>(tokens);
+    List<String> termList = new ArrayList<>(uniqueTerms);
+
+    // v4.3 - 使用批量查询：一条 SQL 的 GROUP BY 获取所有词的文档频率
+    // 原来的 N+1 查询：1000个词 = 1000次 SELECT
+    // 现在的批量查询：1000个词 = 1次 SELECT
+    List<Bm25TermFreq> docCountResults = termFreqMapper.batchSelectDocCount(termList);
+
+    // 构建词 -> 文档频率 的映射
+    Map<String, Integer> termDocCountMap = new HashMap<>();
+    for (Bm25TermFreq result : docCountResults) {
+      termDocCountMap.put(result.getTerm(), result.getFrequency());
+    }
+
+    // 为所有词构建 DocFreq 对象（不存在的词文档数为0）
     List<Bm25DocFreq> docFreqList = new ArrayList<>();
-
-    // 批量收集每个词的文档数量
-    for (String term : uniqueTerms) {
-      // 统计该词在多少个不同文档中出现
-      Long docCount = termFreqMapper.selectCount(
-              new LambdaQueryWrapper<Bm25TermFreq>()
-                      .eq(Bm25TermFreq::getTerm, term)
-      );
-
+    for (String term : termList) {
       Bm25DocFreq df = new Bm25DocFreq();
       df.setTerm(term);
-      df.setDocCount(docCount != null ? docCount.intValue() : 0);
+      df.setDocCount(termDocCountMap.getOrDefault(term, 0));
       docFreqList.add(df);
     }
 
@@ -476,6 +502,20 @@ public class Bm25IndexServiceImpl extends ServiceImpl<Bm25IndexMapper, Bm25Index
       stats.setValue(value);
       statsMapper.updateById(stats);
       log.debug("【BM25索引】更新统计: {} = {}", key, value);
+    }
+  }
+
+  /**
+   * v4.3 - 并行处理时使用的临时数据结构
+   * 用于在并行流中收集索引和词频数据
+   */
+  private static class IndexData {
+    final Bm25Index index;
+    final List<Bm25TermFreq> termFreqs;
+
+    IndexData(Bm25Index index, List<Bm25TermFreq> termFreqs) {
+      this.index = index;
+      this.termFreqs = termFreqs;
     }
   }
 }

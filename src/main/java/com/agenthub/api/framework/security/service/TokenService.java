@@ -103,6 +103,13 @@ public class TokenService {
                 .getPayload();
     }
 
+    /**
+     * 公开方法：直接解析 token（用于 SSE 等特殊场景）
+     */
+    public Claims parseTokenDirect(String token) {
+        return parseToken(token);
+    }
+
     private String getToken(HttpServletRequest request) {
         // 1. 优先从请求头获取
         String token = request.getHeader(Constants.TOKEN);

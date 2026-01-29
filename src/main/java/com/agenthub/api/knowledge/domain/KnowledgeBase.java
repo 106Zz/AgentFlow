@@ -75,7 +75,14 @@ public class KnowledgeBase extends BaseEntity {
     private String summary;
 
     /**
-     * 向量化状态（0未处理 1处理中 2已完成 3失败）
+     * 向量化状态
+     * <ul>
+     *   <li>0 - 待上传：记录已创建，等待 OSS 上传（file_path=NULL）</li>
+     *   <li>1 - 待处理：OSS 已上传完成，等待分词/向量化（file_path 有值）</li>
+     *   <li>2 - 处理中：正在分词/向量化中</li>
+     *   <li>3 - 成功：文档处理完成，向量已入库</li>
+     *   <li>4 - 失败：处理失败，可重新触发处理</li>
+     * </ul>
      */
     private String vectorStatus;
 

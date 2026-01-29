@@ -9,6 +9,7 @@ import org.springframework.stereotype.Component;
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /**
  * 中文分词器
@@ -142,14 +143,41 @@ public class ChineseTokenizer {
     // ========== 批量处理方法 ==========
 
     /**
-     * 批量分词
+     * 批量分词（v4.3 优化：使用并行处理）
+     *
+     * @param texts 文本列表
+     * @return 文本 -> 分词结果的映射
      */
     public Map<String, List<String>> tokenizeBatch(List<String> texts) {
-        Map<String, List<String>> results = new HashMap<>();
-        for (String text : texts) {
-            results.put(text, tokenize(text));
+        if (texts == null || texts.isEmpty()) {
+            return new HashMap<>();
         }
-        return results;
+
+        // v4.3 - 使用并行流处理，充分利用多核 CPU
+        return texts.parallelStream()
+                .collect(Collectors.toMap(
+                        text -> text,
+                        this::tokenize,
+                        (a, b) -> a  // 合并函数（理论上不会有重复 key）
+                ));
+    }
+
+    /**
+     * 批量分词（返回列表形式，按输入顺序）
+     * v4.3 新增：保持输入顺序的批量分词方法
+     *
+     * @param texts 文本列表
+     * @return 分词结果列表（与输入一一对应）
+     */
+    public List<List<String>> tokenizeBatchList(List<String> texts) {
+        if (texts == null || texts.isEmpty()) {
+            return new ArrayList<>();
+        }
+
+        // v4.3 - 使用并行流处理，但保持顺序
+        return texts.parallelStream()
+                .map(this::tokenize)
+                .collect(Collectors.toList());
     }
 
     /**

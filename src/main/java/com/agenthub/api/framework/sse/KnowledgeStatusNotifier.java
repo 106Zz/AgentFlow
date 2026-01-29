@@ -1,5 +1,6 @@
 package com.agenthub.api.framework.sse;
 
+import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
@@ -51,7 +52,16 @@ public class KnowledgeStatusNotifier {
    * 推送失败状态
    */
   public void notifyFailed(Long userId, Long knowledgeId, String errorMsg) {
-    notifyStatusChange(userId, knowledgeId, "3", null);
+    if (userId == null) {
+      return;
+    }
+    // 失败消息包含错误信息
+    sseEmitterService.sendMessage(userId, Map.of(
+        "type", "failed",
+        "knowledgeId", knowledgeId,
+        "error", errorMsg != null ? errorMsg : "未知错误",
+        "timestamp", System.currentTimeMillis()
+    ));
     log.warn("【状态推送】知识库 {} 处理失败: {}", knowledgeId, errorMsg);
   }
 }

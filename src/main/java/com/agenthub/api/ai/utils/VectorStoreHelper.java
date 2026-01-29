@@ -79,7 +79,7 @@ public class VectorStoreHelper {
 
     // ==================== 常量定义 ====================
 
-    /** 向量存储批次大小 */
+    /** 向量存储批次大小（DashScope API 限制最大为 10）*/
     private static final int VECTOR_BATCH_SIZE = 10;
 
     /** Chunk最小长度（字符） */
@@ -288,6 +288,7 @@ public class VectorStoreHelper {
 
     /**
      * 解析PDF文件（混合模式：文本提取 + OCR）
+     * v4.3 - 页面级并行OCR优化
      */
     private List<Document> parsePdf(byte[] fileBytes) throws IOException {
         List<Document> documents = new ArrayList<>();
@@ -300,6 +301,8 @@ public class VectorStoreHelper {
             int totalPages = pdfDoc.getNumberOfPages();
             log.info("PDF共 {} 页，开始页级混合解析...", totalPages);
 
+            // 第一遍：快速文本提取（串行，很快）
+            List<Integer> needOcrPages = new ArrayList<>();
             for (int i = 0; i < totalPages; i++) {
                 stripper.setStartPage(i + 1);
                 stripper.setEndPage(i + 1);
@@ -311,21 +314,46 @@ public class VectorStoreHelper {
                     doc.getMetadata().put("ocr_used", false);
                     documents.add(doc);
                 } else {
-                    log.info("第 {} 页：文本不足，启用 Qwen-VL OCR...", i + 1);
-                    BufferedImage image = renderer.renderImage(i, 2.0f);
-                    String ocrText = ocrReader.processSingleImage(image);
-
-                    if (ocrText != null && !ocrText.isEmpty()) {
-                        Document doc = new Document(ocrText);
-                        doc.getMetadata().put("page_index", i + 1);
-                        doc.getMetadata().put("ocr_used", true);
-                        documents.add(doc);
-                    }
+                    needOcrPages.add(i);
                 }
+            }
+
+            // 第二遍：并行OCR处理（慢操作并行化）
+            if (!needOcrPages.isEmpty()) {
+                log.info("需要OCR的页面: {} 页，开始并行处理...", needOcrPages.size());
+                List<Document> ocrDocuments = processOcrPagesParallel(renderer, needOcrPages);
+                documents.addAll(ocrDocuments);
             }
         }
 
         return documents;
+    }
+
+    /**
+     * 并行OCR处理多个页面
+     */
+    private List<Document> processOcrPagesParallel(PDFRenderer renderer, List<Integer> pages) {
+        // 使用并行流处理，默认使用 ForkJoinPool.commonPool()
+        return pages.parallelStream()
+                .map(pageIndex -> {
+                    try {
+                        log.info("并行OCR处理第 {} 页...", pageIndex + 1);
+                        BufferedImage image = renderer.renderImage(pageIndex, 2.0f);
+                        String ocrText = ocrReader.processSingleImage(image);
+
+                        if (ocrText != null && !ocrText.isEmpty()) {
+                            Document doc = new Document(ocrText);
+                            doc.getMetadata().put("page_index", pageIndex + 1);
+                            doc.getMetadata().put("ocr_used", true);
+                            return doc;
+                        }
+                    } catch (Exception e) {
+                        log.error("第 {} 页OCR失败", pageIndex + 1, e);
+                    }
+                    return null;
+                })
+                .filter(doc -> doc != null)
+                .toList();
     }
 
     /**

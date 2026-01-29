@@ -34,6 +34,14 @@ public class RabbitMQConfig {
   public static final String DOC_RETRY_ROUTING_KEY = "doc.retry";
   public static final String DOC_DLQ_ROUTING_KEY = "doc.dlq";
 
+  // ==================== 文件上传队列 ====================
+  public static final String FILE_UPLOAD_EXCHANGE = "file.upload.exchange";
+  public static final String FILE_UPLOAD_QUEUE = "file.upload.queue";
+  public static final String FILE_UPLOAD_DLQ_EXCHANGE = "file.upload.dlq.exchange";
+  public static final String FILE_UPLOAD_DLQ_QUEUE = "file.upload.dlq.queue";
+  public static final String FILE_UPLOAD_ROUTING_KEY = "file.upload";
+  public static final String FILE_UPLOAD_DLQ_ROUTING_KEY = "file.upload.dlq";
+
   /**
    * 延迟交换机（x-delayed-message 插件支持）
    */
@@ -186,5 +194,62 @@ public class RabbitMQConfig {
     return BindingBuilder.bind(docDlqQueue())
             .to(docDlqExchange())
             .with(DOC_DLQ_ROUTING_KEY);
+  }
+
+  // ==================== 文件上传队列配置 ====================
+
+  /**
+   * 文件上传交换机
+   */
+  @Bean
+  public DirectExchange fileUploadExchange() {
+    return new DirectExchange(FILE_UPLOAD_EXCHANGE, true, false);
+  }
+
+  /**
+   * 文件上传死信交换机
+   */
+  @Bean
+  public DirectExchange fileUploadDlqExchange() {
+    return new DirectExchange(FILE_UPLOAD_DLQ_EXCHANGE, true, false);
+  }
+
+  /**
+   * 文件上传队列（失败后进入死信队列）
+   */
+  @Bean
+  public Queue fileUploadQueue() {
+    return QueueBuilder.durable(FILE_UPLOAD_QUEUE)
+            .withArgument("x-dead-letter-exchange", FILE_UPLOAD_DLQ_EXCHANGE)
+            .withArgument("x-dead-letter-routing-key", FILE_UPLOAD_DLQ_ROUTING_KEY)
+            .build();
+  }
+
+  /**
+   * 文件上传死信队列
+   */
+  @Bean
+  public Queue fileUploadDlqQueue() {
+    return QueueBuilder.durable(FILE_UPLOAD_DLQ_QUEUE).build();
+  }
+
+  /**
+   * 绑定：文件上传交换机 → 文件上传队列
+   */
+  @Bean
+  public Binding fileUploadBinding() {
+    return BindingBuilder.bind(fileUploadQueue())
+            .to(fileUploadExchange())
+            .with(FILE_UPLOAD_ROUTING_KEY);
+  }
+
+  /**
+   * 绑定：文件上传死信交换机 → 文件上传死信队列
+   */
+  @Bean
+  public Binding fileUploadDlqBinding() {
+    return BindingBuilder.bind(fileUploadDlqQueue())
+            .to(fileUploadDlqExchange())
+            .with(FILE_UPLOAD_DLQ_ROUTING_KEY);
   }
 }

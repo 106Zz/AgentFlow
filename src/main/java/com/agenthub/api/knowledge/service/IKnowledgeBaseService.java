@@ -3,11 +3,11 @@ package com.agenthub.api.knowledge.service;
 import com.agenthub.api.common.core.page.PageQuery;
 import com.agenthub.api.common.core.page.PageResult;
 import com.agenthub.api.knowledge.domain.KnowledgeBase;
+import com.agenthub.api.knowledge.dto.BatchPrepareResponse;
 
 import com.baomidou.mybatisplus.extension.service.IService;
 
 import java.util.List;
-import java.util.Map;
 
 /**
  * 知识库 业务层
@@ -25,36 +25,6 @@ public interface IKnowledgeBaseService extends IService<KnowledgeBase> {
     PageResult<KnowledgeBase> selectUserKnowledgePage(Long userId, KnowledgeBase knowledge, PageQuery pageQuery);
 
     /**
-     * 获取OSS上传凭证
-     * 
-     * @param userId 用户ID
-     * @param isAdmin 是否管理员
-     * @param filename 文件名
-     * @return 上传凭证信息
-     */
-    Map<String, String> getUploadPolicy(Long userId, boolean isAdmin, String filename);
-
-    /**
-     * 处理前端直传OSS后的回调
-     * 
-     * @param knowledge 知识库对象
-     * @param userId 当前用户ID
-     * @param isAdmin 是否管理员
-     * @return 创建的知识库记录
-     */
-    KnowledgeBase handleUploadCallback(KnowledgeBase knowledge, Long userId, boolean isAdmin);
-
-    /**
-     * 批量处理上传回调
-     * 
-     * @param knowledgeList 知识库列表
-     * @param userId 当前用户ID
-     * @param isAdmin 是否管理员
-     * @return 创建的知识库记录列表
-     */
-    List<KnowledgeBase> handleBatchUploadCallback(List<KnowledgeBase> knowledgeList, Long userId, boolean isAdmin);
-
-    /**
      * 删除知识库（包括OSS文件和向量数据）
      * 异步执行，立即返回
      *
@@ -64,4 +34,52 @@ public interface IKnowledgeBaseService extends IService<KnowledgeBase> {
      */
     void deleteKnowledgeWithFiles(Long[] ids, Long userId, boolean isAdmin);
 
+    /**
+     * 重新触发文档处理（用于状态卡住或失败时重试）
+     * 会清理旧向量数据后重新处理
+     *
+     * @param ids 知识库ID数组
+     * @param userId 当前用户ID
+     * @param isAdmin 是否管理员
+     */
+    void reprocessKnowledge(Long[] ids, Long userId, boolean isAdmin);
+
+    // ==================== 后台上传接口 ====================
+
+    /**
+     * 后台上传文件：接收文件 + 创建记录 + 发送 MQ 消息
+     * 用户可立即离开，由后台异步处理
+     *
+     * @param fileName 文件名
+     * @param title 标题
+     * @param fileType 文件类型
+     * @param fileSize 文件大小
+     * @param tempFilePath 临时文件路径（已上传到服务器本地）
+     * @param userId 当前用户ID
+     * @param isAdmin 是否管理员
+     * @return 知识库记录ID
+     */
+    Long submitBackgroundUpload(String fileName, String title, String fileType, Long fileSize,
+                                String tempFilePath, Long userId, boolean isAdmin);
+
+    /**
+     * 批量后台上传文件
+     *
+     * @param requests 批量上传请求
+     * @param userId 当前用户ID
+     * @param isAdmin 是否管理员
+     * @return 批量上传响应
+     */
+    BatchPrepareResponse batchBackgroundUpload(List<BackgroundUploadRequest> requests, Long userId, boolean isAdmin);
+
+    /**
+     * 后台上传请求
+     */
+    record BackgroundUploadRequest(
+        String fileName,
+        String title,
+        String fileType,
+        Long fileSize,
+        String tempFilePath
+    ) {}
 }
