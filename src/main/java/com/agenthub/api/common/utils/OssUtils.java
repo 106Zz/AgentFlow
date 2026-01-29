@@ -43,6 +43,28 @@ public class OssUtils {
     private String accessKeySecret;
 
     /**
+     * v4.3 - 临时文件目录配置（与KnowledgeBaseController保持一致）
+     * 默认使用 src/main/resources/temp 目录
+     */
+    @Value("${upload.temp.dir:}")
+    private String tempDirConfig;
+
+    /**
+     * 获取临时文件目录（绝对路径）
+     */
+    private String getTempDir() {
+        if (tempDirConfig != null && !tempDirConfig.isEmpty()) {
+            java.io.File dir = new java.io.File(tempDirConfig);
+            if (dir.isAbsolute()) {
+                return tempDirConfig;
+            }
+            return new java.io.File(System.getProperty("user.dir"), tempDirConfig).getAbsolutePath() + java.io.File.separator;
+        }
+        // 默认：src/main/resources/temp
+        return new java.io.File(System.getProperty("user.dir"), "src" + java.io.File.separator + "main" + java.io.File.separator + "resources" + java.io.File.separator + "temp" + java.io.File.separator).getAbsolutePath() + java.io.File.separator;
+    }
+
+    /**
      * 生成前端直传 OSS 的临时上传凭证
      * 
      * @param dir 上传目录前缀（如：knowledge/user/123/）
@@ -140,18 +162,25 @@ public class OssUtils {
 
     /**
      * 下载文件到本地临时目录（用于文档解析）
-     * 
+     * v4.3 - 使用配置的临时目录，而非系统临时目录
+     *
      * @param objectName OSS文件路径
      * @return 本地临时文件路径
      */
     public String downloadToTemp(String objectName) {
         try {
-            String tempDir = System.getProperty("java.io.tmpdir");
-            String localPath = tempDir + "/" + UUID.randomUUID().toString() + "_" + getFileName(objectName);
-            
-            ossClient.getObject(new com.aliyun.oss.model.GetObjectRequest(bucketName, objectName), 
+            // 获取临时目录（绝对路径）
+            String tempDir = getTempDir();
+            java.io.File tempDirFile = new java.io.File(tempDir);
+            if (!tempDirFile.exists()) {
+                tempDirFile.mkdirs();
+            }
+
+            String localPath = tempDir + UUID.randomUUID().toString() + "_" + getFileName(objectName);
+
+            ossClient.getObject(new com.aliyun.oss.model.GetObjectRequest(bucketName, objectName),
                     new java.io.File(localPath));
-            
+
             log.info("文件下载到本地: {}", localPath);
             return localPath;
         } catch (Exception e) {
@@ -168,8 +197,78 @@ public class OssUtils {
     }
 
     /**
+     * 后端直接上传文件到 OSS
+     *
+     * @param fileBytes 文件字节数组
+     * @param dir 上传目录（如：knowledge/user/123/）
+     * @param filename 原始文件名
+     * @return OSS 文件路径（objectName）
+     */
+    public String uploadFile(byte[] fileBytes, String dir, String filename) {
+        try {
+            // 生成唯一文件名
+            String date = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyy/MM/dd"));
+            String uuid = UUID.randomUUID().toString().replace("-", "");
+
+            // 提取文件扩展名
+            String ext = "";
+            if (filename != null && filename.contains(".")) {
+                ext = filename.substring(filename.lastIndexOf("."));
+            }
+
+            String objectName = dir + date + "/" + uuid + ext;
+
+            // 上传文件
+            ossClient.putObject(bucketName, objectName, new java.io.ByteArrayInputStream(fileBytes));
+
+            log.info("后端上传文件到OSS成功，目录: {}, 文件: {}, 大小: {} bytes",
+                    dir, objectName, fileBytes.length);
+
+            return objectName;
+        } catch (Exception e) {
+            log.error("后端上传文件到OSS失败", e);
+            throw new ServiceException("文件上传失败: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 后端直接上传文件到 OSS（使用 File 对象）
+     *
+     * @param file 本地文件
+     * @param dir 上传目录（如：knowledge/user/123/）
+     * @return OSS 文件路径（objectName）
+     */
+    public String uploadFile(java.io.File file, String dir) {
+        try {
+            // 生成唯一文件名
+            String date = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyy/MM/dd"));
+            String uuid = UUID.randomUUID().toString().replace("-", "");
+
+            // 提取文件扩展名
+            String ext = "";
+            String filename = file.getName();
+            if (filename.contains(".")) {
+                ext = filename.substring(filename.lastIndexOf("."));
+            }
+
+            String objectName = dir + date + "/" + uuid + ext;
+
+            // 上传文件
+            ossClient.putObject(bucketName, objectName, file);
+
+            log.info("后端上传文件到OSS成功，目录: {}, 文件: {}, 大小: {} bytes",
+                    dir, objectName, file.length());
+
+            return objectName;
+        } catch (Exception e) {
+            log.error("后端上传文件到OSS失败", e);
+            throw new ServiceException("文件上传失败: " + e.getMessage());
+        }
+    }
+
+    /**
      * 验证文件是否存在
-     * 
+     *
      * @param objectName OSS文件路径
      * @return 是否存在
      */
@@ -179,6 +278,27 @@ public class OssUtils {
         } catch (Exception e) {
             log.error("检查文件是否存在失败", e);
             return false;
+        }
+    }
+
+    /**
+     * v4.3 - 直接从 OSS 读取文件内容为字节数组（不下载到临时文件）
+     * 用于文档处理时直接读取 OSS 文件，避免不必要的下载
+     *
+     * @param objectName OSS文件路径
+     * @return 文件字节数组
+     */
+    public byte[] readFileAsBytes(String objectName) {
+        try {
+            com.aliyun.oss.model.OSSObject ossObject = ossClient.getObject(bucketName, objectName);
+            try (java.io.InputStream inputStream = ossObject.getObjectContent()) {
+                byte[] bytes = inputStream.readAllBytes();
+                log.info("从OSS读取文件成功，路径: {}, 大小: {} bytes", objectName, bytes.length);
+                return bytes;
+            }
+        } catch (Exception e) {
+            log.error("从OSS读取文件失败，路径: {}", objectName, e);
+            throw new ServiceException("从OSS读取文件失败: " + e.getMessage());
         }
     }
 }

@@ -57,7 +57,7 @@ public class DocProcessRetryConsumer {
       int vectorCount = documentProcessService.processDocumentCore(knowledge);
 
       // 更新状态为已完成（带重试）
-      updateStatusWithRetry(knowledge, "2", vectorCount);
+      updateStatusWithRetry(knowledge, "3", vectorCount);
       statusNotifier.notifyCompleted(knowledge.getUserId(), knowledge.getId(), vectorCount);
 
       // 成功后 ACK
@@ -79,7 +79,7 @@ public class DocProcessRetryConsumer {
           producer.sendToDeadLetterQueue(nextMessage);
 
           // 更新状态为失败（带重试）
-          updateStatusWithRetry(knowledge, "3", null);
+          updateStatusWithRetry(knowledge, "4", null);
 
           // 单独更新 remark
           try {

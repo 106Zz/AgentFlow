@@ -6,22 +6,25 @@ import com.agenthub.api.ai.utils.VectorStoreHelper;
 import com.agenthub.api.common.core.page.PageQuery;
 import com.agenthub.api.common.core.page.PageResult;
 import com.agenthub.api.common.exception.ServiceException;
-import com.agenthub.api.common.utils.OssUtils;
 import com.agenthub.api.knowledge.domain.DeleteResult;
 import com.agenthub.api.knowledge.domain.KnowledgeBase;
+import com.agenthub.api.knowledge.dto.BatchPrepareResponse;
 import com.agenthub.api.knowledge.mapper.KnowledgeBaseMapper;
 import com.agenthub.api.knowledge.service.IKnowledgeBaseService;
+import com.agenthub.api.mq.domain.FileUploadMessage;
+import com.agenthub.api.mq.producer.FileUploadProducer;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 
 /**
  * 知识库服务实现类
@@ -34,7 +37,6 @@ public class KnowledgeBaseServiceImpl extends ServiceImpl<KnowledgeBaseMapper, K
 
     private final VectorStoreHelper vectorStoreHelper;
     private final DocumentProcessServiceImpl documentProcessService;
-    private final OssUtils ossUtils;
 
     @Override
     public PageResult<KnowledgeBase> selectKnowledgePage(KnowledgeBase knowledge, PageQuery pageQuery) {
@@ -43,7 +45,7 @@ public class KnowledgeBaseServiceImpl extends ServiceImpl<KnowledgeBaseMapper, K
                 .eq(StrUtil.isNotEmpty(knowledge.getCategory()), KnowledgeBase::getCategory, knowledge.getCategory())
                 .eq(StrUtil.isNotEmpty(knowledge.getStatus()), KnowledgeBase::getStatus, knowledge.getStatus())
                 .orderByDesc(KnowledgeBase::getCreateTime);
-        
+
         IPage<KnowledgeBase> page = this.page(pageQuery.build(), wrapper);
         return PageResult.build(page);
     }
@@ -51,114 +53,22 @@ public class KnowledgeBaseServiceImpl extends ServiceImpl<KnowledgeBaseMapper, K
     @Override
     public PageResult<KnowledgeBase> selectUserKnowledgePage(Long userId, KnowledgeBase knowledge, PageQuery pageQuery) {
         LambdaQueryWrapper<KnowledgeBase> wrapper = new LambdaQueryWrapper<>();
-        
+
         // 用户可以看到：全局公开的 + 自己的
         wrapper.and(w -> w
                 .and(w1 -> w1.eq(KnowledgeBase::getUserId, 0).eq(KnowledgeBase::getIsPublic, "1"))
                 .or()
                 .eq(KnowledgeBase::getUserId, userId)
         );
-        
+
         // 其他查询条件
         wrapper.like(StrUtil.isNotEmpty(knowledge.getTitle()), KnowledgeBase::getTitle, knowledge.getTitle())
                 .eq(StrUtil.isNotEmpty(knowledge.getCategory()), KnowledgeBase::getCategory, knowledge.getCategory())
                 .eq(StrUtil.isNotEmpty(knowledge.getStatus()), KnowledgeBase::getStatus, knowledge.getStatus())
                 .orderByDesc(KnowledgeBase::getCreateTime);
-        
+
         IPage<KnowledgeBase> page = this.page(pageQuery.build(), wrapper);
         return PageResult.build(page);
-    }
-
-    @Override
-    public Map<String, String> getUploadPolicy(Long userId, boolean isAdmin, String filename) {
-        // 定义上传目录：管理员上传到 public/，普通用户到 user/{userId}/
-        String dir = isAdmin ? "knowledge/public/" : "knowledge/user/" + userId + "/";
-        
-        // 调用 OssUtils 生成临时上传策略
-        return ossUtils.generateUploadPolicy(dir, filename);
-    }
-
-    @Override
-    public KnowledgeBase handleUploadCallback(KnowledgeBase knowledge, Long userId, boolean isAdmin) {
-        // 1. 参数校验
-        if (StrUtil.isAllBlank(knowledge.getFileName(), knowledge.getFilePath())) {
-            throw new ServiceException("文件名或OSS路径不能为空");
-        }
-        if (knowledge.getFileSize() == null || knowledge.getFileSize() <= 0) {
-            throw new ServiceException("文件大小无效");
-        }
-
-        // 2. 验证文件是否真实存在（防篡改）
-        if (!ossUtils.doesObjectExist(knowledge.getFilePath())) {
-            throw new ServiceException("上传文件在OSS中不存在，请检查");
-        }
-
-        // 3. 权限处理
-        if (isAdmin) {
-            // 管理员可以指定公开或私有
-            if ("1".equals(knowledge.getIsPublic())) {
-                knowledge.setUserId(0L);  // 全局知识库
-            } else {
-                knowledge.setUserId(userId);
-            }
-        } else {
-            // 普通用户强制私有
-            knowledge.setUserId(userId);
-            knowledge.setIsPublic("0");
-        }
-
-        // 4. 设置默认值
-        if (StrUtil.isBlank(knowledge.getTitle())) {
-            knowledge.setTitle(knowledge.getFileName());
-        }
-        if (StrUtil.isBlank(knowledge.getFileType())) {
-            knowledge.setFileType(getFileType(knowledge.getFileName()));
-        }
-        knowledge.setVectorStatus("0");  // 未处理
-        knowledge.setStatus("0");
-
-        // 5. 保存记录
-        boolean saved = this.save(knowledge);
-        if (!saved) {
-            throw new ServiceException("保存知识库记录失败");
-        }
-
-        // 6. 异步处理文档解析和向量化
-        documentProcessService.processKnowledgeAsync(knowledge.getId());
-
-        log.info("知识库上传成功，ID: {}, 文件: {}, 用户: {}", 
-                knowledge.getId(), knowledge.getFileName(), userId);
-
-        return knowledge;
-    }
-
-    @Override
-    public List<KnowledgeBase> handleBatchUploadCallback(List<KnowledgeBase> knowledgeList, Long userId, boolean isAdmin) {
-        if (knowledgeList == null || knowledgeList.isEmpty()) {
-            throw new ServiceException("上传列表不能为空");
-        }
-
-        List<KnowledgeBase> savedList = new ArrayList<>();
-        List<Long> ids = new ArrayList<>();
-
-        for (KnowledgeBase knowledge : knowledgeList) {
-            try {
-                KnowledgeBase saved = handleUploadCallback(knowledge, userId, isAdmin);
-                savedList.add(saved);
-                ids.add(saved.getId());
-            } catch (Exception e) {
-                log.error("批量上传处理失败，文件: {}", knowledge.getFileName(), e);
-                // 继续处理其他文件
-            }
-        }
-
-        // 批量处理
-        if (!ids.isEmpty()) {
-            documentProcessService.batchProcessKnowledge(ids.toArray(new Long[0]));
-        }
-
-        log.info("批量上传成功，共 {} 个文件", savedList.size());
-        return savedList;
     }
 
     @Override
@@ -204,23 +114,169 @@ public class KnowledgeBaseServiceImpl extends ServiceImpl<KnowledgeBaseMapper, K
         }
     }
 
-    /**
-     * 获取文件类型
-     */
-    private String getFileType(String filename) {
-        if (filename == null || !filename.contains(".")) {
-            return "unknown";
+    @Override
+    @Async("fileProcessExecutor")
+    public void reprocessKnowledge(Long[] ids, Long userId, boolean isAdmin) {
+        log.info("【重新处理】开始处理 {} 个知识库，用户: {}", ids.length, userId);
+
+        List<Long> validIds = new ArrayList<>();
+
+        for (Long id : ids) {
+            try {
+                KnowledgeBase knowledge = this.getById(id);
+                if (knowledge == null) {
+                    log.warn("【重新处理】知识库不存在，跳过: {}", id);
+                    continue;
+                }
+
+                // 权限检查
+                if (!isAdmin && !knowledge.getUserId().equals(userId)) {
+                    log.warn("【重新处理】无权操作，跳过: {}", id);
+                    continue;
+                }
+
+                // 状态检查：只重新处理失败(4)、待处理(0)、待上传(0)的记录
+                // 注意：处理中(2)的记录不重新处理，除非超时卡死
+                String status = knowledge.getVectorStatus();
+                if (!"0".equals(status) && !"1".equals(status) && !"2".equals(status) && !"4".equals(status)) {
+                    log.info("【重新处理】状态为 {}，无需重新处理: {}", status, id);
+                    continue;
+                }
+
+                // 检查是否长时间卡在状态2（处理中，超过30分钟认为卡死）
+                if ("2".equals(status)) {
+                    long minutesSinceUpdate = (System.currentTimeMillis() - knowledge.getUpdateTime().toInstant(ZoneOffset.of("+8")).toEpochMilli()) / (1000 * 60);
+                    if (minutesSinceUpdate < 30) {
+                        log.info("【重新处理】处理中但未超时，跳过: {}", id);
+                        continue;
+                    }
+                    log.warn("【重新处理】检测到卡死记录（{}分钟未更新），清理旧数据: {}", minutesSinceUpdate, id);
+                }
+
+                // 清理旧向量数据（如果存在）
+                try {
+                    vectorStoreHelper.deleteKnowledgeData(List.of(id));
+                    log.info("【重新处理】已清理旧向量数据: {}", id);
+                } catch (Exception e) {
+                    log.warn("【重新处理】清理旧向量数据失败，继续处理: {}", id, e);
+                }
+
+                // 重置状态为待处理
+                knowledge.setVectorStatus("2");
+                this.updateById(knowledge);
+
+                validIds.add(id);
+
+            } catch (Exception e) {
+                log.error("【重新处理】处理单个记录失败，id: {}", id, e);
+            }
         }
-        String extension = filename.substring(filename.lastIndexOf(".") + 1).toLowerCase();
-        return switch (extension) {
-            case "pdf" -> "pdf";
-            case "doc", "docx" -> "word";
-            case "xls", "xlsx" -> "excel";
-            case "ppt", "pptx" -> "ppt";
-            case "jpg", "jpeg", "png", "gif", "bmp" -> "image";
-            case "txt" -> "text";
-            case "md" -> "markdown";
-            default -> "other";
-        };
+
+        if (!validIds.isEmpty()) {
+            documentProcessService.batchProcessKnowledge(validIds.toArray(new Long[0]));
+            log.info("【重新处理】已触发 {} 个文档的重新处理", validIds.size());
+        } else {
+            log.info("【重新处理】没有需要重新处理的文档");
+        }
+    }
+
+    // ==================== 后台上传实现 ====================
+
+    @Autowired
+    private FileUploadProducer fileUploadProducer;
+
+    @Override
+    public Long submitBackgroundUpload(String fileName, String title, String fileType, Long fileSize,
+                                       String tempFilePath, Long userId, boolean isAdmin) {
+        // 1. 创建知识库记录
+        KnowledgeBase knowledge = new KnowledgeBase();
+        knowledge.setFileName(fileName);
+        knowledge.setTitle(StrUtil.isNotBlank(title) ? title : fileName);
+        knowledge.setFileType(StrUtil.isNotBlank(fileType) ? fileType : getFileType(fileName));
+        knowledge.setFileSize(fileSize);
+        knowledge.setVectorStatus("0"); // 待处理
+        knowledge.setStatus("0");
+        // v4.3 - 先存储临时文件路径，以便处理失败时可以重新处理
+        // 上传到OSS成功后会更新为OSS路径
+        knowledge.setFilePath(tempFilePath);
+        knowledge.setUserId(userId);
+        knowledge.setIsPublic("0");
+
+        this.save(knowledge);
+        log.info("【后台上传】创建知识库记录成功，ID: {}, 文件名: {}, 临时路径: {}", knowledge.getId(), fileName, tempFilePath);
+
+        // 2. 发送 MQ 消息
+        FileUploadMessage message = FileUploadMessage.builder()
+                .knowledgeId(knowledge.getId())
+                .userId(userId)
+                .fileName(fileName)
+                .title(title)
+                .fileType(fileType)
+                .fileSize(fileSize)
+                .tempFilePath(tempFilePath)
+                .isAdmin(isAdmin)
+                .createTime(System.currentTimeMillis())
+                .build();
+
+        fileUploadProducer.sendUploadMessage(message);
+        log.info("【后台上传】MQ消息已发送，知识库ID: {}", knowledge.getId());
+
+        return knowledge.getId();
+    }
+
+    @Override
+    public BatchPrepareResponse batchBackgroundUpload(List<BackgroundUploadRequest> requests, Long userId, boolean isAdmin) {
+        if (requests == null || requests.isEmpty()) {
+            throw new ServiceException("上传列表不能为空");
+        }
+
+        BatchPrepareResponse response = new BatchPrepareResponse();
+        response.setFiles(new ArrayList<>());
+        int successCount = 0;
+        int failedCount = 0;
+
+        for (BackgroundUploadRequest request : requests) {
+            BatchPrepareResponse.FileUploadInfo fileInfo = new BatchPrepareResponse.FileUploadInfo();
+            fileInfo.setFileName(request.fileName());
+
+            try {
+                // 提交后台上传
+                Long knowledgeId = submitBackgroundUpload(
+                        request.fileName(),
+                        request.title(),
+                        request.fileType(),
+                        request.fileSize(),
+                        request.tempFilePath(),
+                        userId,
+                        isAdmin
+                );
+
+                fileInfo.setKnowledgeId(knowledgeId);
+                fileInfo.setStatus("submitted");
+                fileInfo.setUploadPolicy(null); // 后台上传不需要前端上传凭证
+                successCount++;
+
+            } catch (Exception e) {
+                fileInfo.setStatus("error");
+                fileInfo.setErrorMsg(e.getMessage());
+                failedCount++;
+                log.error("【后台上传】提交失败，文件名: {}", request.fileName(), e);
+            }
+
+            response.getFiles().add(fileInfo);
+        }
+
+        log.info("【后台上传】批量提交完成，成功: {}, 失败: {}", successCount, failedCount);
+        return response;
+    }
+
+    /**
+     * 从文件名提取扩展名
+     */
+    private String getFileType(String fileName) {
+        if (StrUtil.isBlank(fileName) || !fileName.contains(".")) {
+            return "";
+        }
+        return fileName.substring(fileName.lastIndexOf(".") + 1);
     }
 }

@@ -48,8 +48,9 @@ public class DocumentProcessServiceImpl {
   /**
    * DashScope 并发控制信号量
    * 限制同时进行的请求数量，防止触发限流
+   * v4.3 - 提升到10以支持更多并发处理
    */
-  private final Semaphore dashScopeSemaphore = new Semaphore(3);
+  private final Semaphore dashScopeSemaphore = new Semaphore(10);
 
   public DocumentProcessServiceImpl(
           VectorStoreHelper vectorStoreHelper,
@@ -83,14 +84,14 @@ public class DocumentProcessServiceImpl {
 
     try {
       // 更新状态为处理中 + 推送
-      updateStatusWithRetry(knowledge, "1", null);
+      updateStatusWithRetry(knowledge, "2", null);
       statusNotifier.notifyProcessing(knowledge.getUserId(), knowledgeId);
 
       // 执行文档处理（调用公共方法）
       int vectorCount = processDocumentCore(knowledge);
 
       // 更新状态为已完成 + 推送（带重试）
-      updateStatusWithRetry(knowledge, "2", vectorCount);
+      updateStatusWithRetry(knowledge, "3", vectorCount);
       statusNotifier.notifyCompleted(knowledge.getUserId(), knowledgeId, vectorCount);
 
       log.info("【处理完成】知识库 ID: {}, 向量数量: {}", knowledgeId, vectorCount);
@@ -99,7 +100,7 @@ public class DocumentProcessServiceImpl {
       log.error("【处理失败】知识库 ID: {}", knowledgeId, e);
 
       // 更新状态为失败 + 推送（带重试）
-      updateStatusWithRetry(knowledge, "3", null);
+      updateStatusWithRetry(knowledge, "4", null);
 
       // 单独更新 remark（避免影响状态更新）
       try {
@@ -131,37 +132,110 @@ public class DocumentProcessServiceImpl {
 
   /**
    * 核心文档处理逻辑（提取为公共方法，供 MQ Consumer 调用）
+   * v4.3 - 优先使用本地临时文件，节省 OSS 流量
    *
    * @param knowledge 知识库信息
    * @return 向量数量
    * @throws Exception 处理异常
    */
   public int processDocumentCore(KnowledgeBase knowledge) throws Exception {
-    // 从OSS下载文件到本地临时目录
-    String localPath = ossUtils.downloadToTemp(knowledge.getFilePath());
-    File localFile = new File(localPath);
+    String filePath = knowledge.getFilePath();
+    if (filePath == null || filePath.isEmpty()) {
+      throw new ServiceException("文件路径为空，无法处理");
+    }
 
-    try {
-      // 读取文件
-      byte[] fileBytes = new FileInputStream(localFile).readAllBytes();
+    byte[] fileBytes;
 
-      // 构建额外元数据
-      Map<String, Object> extraMetadata = new HashMap<>();
-      extraMetadata.put("category", knowledge.getCategory());
-      extraMetadata.put("tags", knowledge.getTags());
-      extraMetadata.put("title", knowledge.getTitle());
-      extraMetadata.put("file_type", knowledge.getFileType());
+    // v4.3 优先级：本地临时文件 > OSS（节省流量）
+    // 1. 如果 filePath 是本地路径，直接使用
+    if (!filePath.startsWith("knowledge/")) {
+      log.info("【文档处理】使用本地临时文件: {}", filePath);
+      File localFile = new File(filePath);
 
-      // 向量化处理（使用信号量控制并发）
-      return processWithSemaphore(fileBytes, knowledge.getFileName(), knowledge.getFileSize(),
-              knowledge.getId(), knowledge.getUserId(), knowledge.getIsPublic(), extraMetadata);
-
-    } finally {
-      // 删除临时文件
-      if (localFile.exists()) {
-        localFile.delete();
-        log.debug("临时文件已删除: {}", localPath);
+      if (!localFile.exists()) {
+        throw new ServiceException("临时文件不存在: " + filePath + "，请重新上传");
       }
+
+      fileBytes = new FileInputStream(localFile).readAllBytes();
+    } else {
+      // 2. filePath 是 OSS 路径，先检查临时文件夹是否还有该文件
+      File tempFile = findTempFile(knowledge.getFileName(), knowledge.getFileSize());
+      if (tempFile != null && tempFile.exists()) {
+        log.info("【文档处理】发现本地临时文件仍存在，优先使用（节省流量）: {}", tempFile.getPath());
+        fileBytes = new FileInputStream(tempFile).readAllBytes();
+      } else {
+        // 3. 临时文件不存在，从 OSS 读取
+        log.info("【文档处理】本地临时文件不存在，从OSS读取: {}", filePath);
+        fileBytes = ossUtils.readFileAsBytes(filePath);
+      }
+    }
+
+    // 构建额外元数据
+    Map<String, Object> extraMetadata = new HashMap<>();
+    extraMetadata.put("category", knowledge.getCategory());
+    extraMetadata.put("tags", knowledge.getTags());
+    extraMetadata.put("title", knowledge.getTitle());
+    extraMetadata.put("file_type", knowledge.getFileType());
+
+    // 向量化处理（使用信号量控制并发）
+    return processWithSemaphore(fileBytes, knowledge.getFileName(), knowledge.getFileSize(),
+            knowledge.getId(), knowledge.getUserId(), knowledge.getIsPublic(), extraMetadata);
+  }
+
+  /**
+   * v4.3 - 在临时文件夹中查找匹配的文件
+   * 根据原始文件名查找，避免重复从 OSS 下载
+   *
+   * @param originalFileName 原始文件名
+   * @param fileSize 文件大小（用于精确匹配）
+   * @return 找到的临时文件，未找到返回 null
+   */
+  private File findTempFile(String originalFileName, Long fileSize) {
+    try {
+      // 获取临时目录
+      String tempDir = System.getProperty("user.dir") + File.separator +
+                      "src" + File.separator + "main" + File.separator +
+                      "resources" + File.separator + "temp" + File.separator;
+      File tempDirFile = new File(tempDir);
+      if (!tempDirFile.exists() || !tempDirFile.isDirectory()) {
+        return null;
+      }
+
+      // 提取文件扩展名
+      String ext = "";
+      if (originalFileName != null && originalFileName.contains(".")) {
+        ext = originalFileName.substring(originalFileName.lastIndexOf("."));
+      }
+
+      // 遍历临时目录，查找匹配的文件
+      File[] files = tempDirFile.listFiles();
+      if (files == null) {
+        return null;
+      }
+
+      File bestMatch = null;
+      for (File file : files) {
+        if (file.isFile() && file.getName().endsWith(ext)) {
+          // 优先匹配文件大小相同的文件
+          if (fileSize != null && file.length() == fileSize) {
+            log.debug("【临时文件查找】找到精确匹配的临时文件: {} (大小: {})", file.getName(), file.length());
+            return file;
+          }
+          // 如果没有精确匹配，记住这个候选文件
+          if (bestMatch == null) {
+            bestMatch = file;
+          }
+        }
+      }
+
+      // 返回最佳匹配（如果有）
+      if (bestMatch != null) {
+        log.debug("【临时文件查找】找到候选临时文件: {} (大小: {})", bestMatch.getName(), bestMatch.length());
+      }
+      return bestMatch;
+    } catch (Exception e) {
+      log.warn("【临时文件查找】查找临时文件失败: {}", e.getMessage());
+      return null;
     }
   }
 
