@@ -26,8 +26,11 @@ import java.util.concurrent.CompletableFuture;
 
 /**
  * AI 统一入口控制器 (Unified AI Controller)
- * 职责: 处理所有 AI 相关的请求 (对话、合规、计算)，并根据响应类型智能分发。
+ * @deprecated 已被 Agent V2 Controller 取代。
+ * 新接口: /api/v2/agent/chat
+ * 请参考: com.agenthub.api.agent_engine.controller.AgentV2Controller
  */
+@Deprecated
 @Slf4j
 @Tag(name = "AI 核心服务")
 @RestController

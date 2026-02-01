@@ -13,12 +13,10 @@ import java.util.List;
 
 /**
  * 智能路由服务 (Router Service)
- * 职责: 作为 AI 系统的"前台"，识别用户意图，并分发给对应的"专工"(UseCase)。
- * 
- * 架构说明: 
- * 采用策略模式 (Strategy Pattern)，通过 List<AIUseCase> 自动发现所有能力。
- * Router 本身不包含任何业务逻辑，只负责分发。
+ * @deprecated 已被 Agent V2 引擎取代 (CapabilityResolver + ChatAgent)。
+ * 请参考 com.agenthub.api.agent_engine 包下的新实现。
  */
+@Deprecated
 @Slf4j
 @Service
 @RequiredArgsConstructor

@@ -32,6 +32,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * 职责: 处理通用对话 (CHAT) 意图，集成 RAG、记忆、角色扮演等高级能力。
  * 它是 "Smart" Client 的主场。
  */
+@Deprecated
 @Slf4j
 @Component
 @RequiredArgsConstructor
