@@ -22,11 +22,16 @@ spring:
       minimum-idle: 5
       maximum-pool-size: 20
       connection-timeout: 30000
-      idle-timeout: 600000
-      max-lifetime: 1800000
+      # 优化连接池配置，避免连接被 PostgreSQL 服务端关闭
+      idle-timeout: 300000        # 5分钟（小于 PostgreSQL 默认超时）
+      max-lifetime: 900000        # 15分钟（小于 PostgreSQL idle_session_timeout）
+      keepalive-time: 60000       # 1分钟（心跳检测，保持连接活跃）
       connection-test-query: SELECT 1
       pool-name: AgentHubHikariPool
       initialization-fail-timeout: -1
+      # 连接验证配置
+      validation-timeout: 3000    # 连接验证超时3秒
+      leak-detection-threshold: 60000  # 连接泄漏检测（60秒）
 
   # JPA配置（已很好）
   jpa:

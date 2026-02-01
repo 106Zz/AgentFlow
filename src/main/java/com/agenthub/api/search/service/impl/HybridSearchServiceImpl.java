@@ -116,10 +116,11 @@ public class HybridSearchServiceImpl implements IHybridSearchService {
                 convertToBm25Request(request)
         );
 
-        // 等待完成
+        // 等待完成（超时从 10 秒增加到 20 秒，给 BM25 检索更多时间）
+        // 注意：配合数据库索引优化和连接池配置，BM25 检索应能在 2-3 秒内完成
         try {
             CompletableFuture.allOf(vectorFuture, bm25Future)
-                    .get(10, TimeUnit.SECONDS);
+                    .get(20, TimeUnit.SECONDS);
 
             List<Document> vectorResults = vectorFuture.get();
             List<Bm25SearchResult> bm25Results = bm25Future.get();
@@ -180,10 +181,11 @@ public class HybridSearchServiceImpl implements IHybridSearchService {
         );
 
 
-        // 等待完成（超时从 5 秒增加到 10 秒，避免 BM25 检索慢导致超时）
+        // 等待完成（超时从 10 秒增加到 20 秒，给 BM25 检索更多时间）
+        // 注意：配合数据库索引优化和连接池配置，BM25 检索应能在 2-3 秒内完成
         try {
             CompletableFuture.allOf(vectorFuture, bm25Future)
-                    .get(10, TimeUnit.SECONDS);
+                    .get(20, TimeUnit.SECONDS);
 
             List<Document> vectorResults = vectorFuture.get();
             List<Bm25SearchResult> bm25Results = bm25Future.get();
