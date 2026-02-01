@@ -33,7 +33,7 @@ public class RouterService {
     public AIResponse handleRequest(AIRequest request) {
         // 1. 识别意图 (Intent Classification)
         // 从数据库获取 Router 提示词，如果未配置则使用默认提示词
-        String routerPrompt = PromptContextHolder.getRouter("ROUTER-INTENT");
+        String routerPrompt = PromptContextHolder.getRouter("ROUTER-INTENT-v1.0");
         if (routerPrompt == null || routerPrompt.isEmpty()) {
             // 降级：使用硬编码默认提示词
             routerPrompt = """

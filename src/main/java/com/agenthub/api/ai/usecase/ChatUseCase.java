@@ -289,10 +289,10 @@ public class ChatUseCase implements AIUseCase {
 
     private ChatClient buildSmartClient(String conversationId) {
         // 从数据库获取 RAG 系统提示词，如果未配置则使用默认值
-        String systemPrompt = PromptContextHolder.getSystem("SYSTEM-RAG");
+        String systemPrompt = PromptContextHolder.getSystem("SYSTEM-RAG-v1.0");
         if (systemPrompt == null || systemPrompt.isEmpty()) {
             systemPrompt = DEFAULT_RAG_SYSTEM_PROMPT;
-            log.debug("[ChatUseCase] 使用默认硬编码 RAG 提示词（数据库未配置 SYSTEM-RAG）");
+            log.debug("[ChatUseCase] 使用默认硬编码 RAG 提示词（数据库未配置 SYSTEM-RAG-v1.0 ）");
         }
 
         return ChatClient.builder(chatModel)
