@@ -26,14 +26,20 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.fasterxml.jackson.databind.JsonNode;
+import freemarker.template.Configuration;
+import freemarker.template.Template;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.ui.freemarker.FreeMarkerTemplateUtils;
 
+import java.io.StringReader;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
@@ -53,6 +59,143 @@ public class SysPromptServiceImpl extends ServiceImpl<SysPromptMapper, SysPrompt
     private final SysPromptVersionMapper versionMapper;
     private final ISysPromptTagService tagService;
     private final ISysPromptVersionService versionService;
+
+    // ==================== Freemarker 模板引擎配置 ====================
+    /**
+     * Freemarker 配置实例
+     *
+     * <p>作用：用于渲染存储在数据库中的提示词模板。
+     *
+     * <p>场景示例：
+     * <pre>
+     * 数据库中存储的模板（Freemarker 格式）：
+     * ┌─────────────────────────────────────────────────────────────────┐
+     * │ 你是一个${role}，负责处理${industry}行业的业务。                 │
+     * │ 当前时间是：${currentTime}                                       │
+     * │ 用户问题：${userQuery}                                           │
+     * │                                                                 │
+     * │ 可用工具列表：                                                   │
+     * │ &lt;#list tools as tool&gt;                                      │
+     * │   - ${tool.name}: ${tool.description}                            │
+     * │ &lt;/#list&gt;                                                  │
+     * └─────────────────────────────────────────────────────────────────┘
+     *
+     * 调用 render("SYSTEM_PROMPT", variables):
+     * ┌─────────────────────────────────────────────────────────────────┐
+     * │ variables = {                                                   │
+     * │   "role": "电力行业助手",                                        │
+     * │   "industry": "电力",                                           │
+     * │   "currentTime": "2026-01-27",                                  │
+     * │   "userQuery": "帮我算一下电费",                                 │
+     * │   "tools": [...]                                                │
+     * │ }                                                               │
+     * └─────────────────────────────────────────────────────────────────┘
+     *                           ↓
+     * 渲染后的提示词：
+     * ┌─────────────────────────────────────────────────────────────────┐
+     * │ 你是一个电力行业助手，负责处理电力行业的业务。                    │
+     * │ 当前时间是：2026-01-27                                           │
+     * │ 用户问题：帮我算一下电费                                         │
+     * │                                                                 │
+     * │ 可用工具列表：                                                   │
+     * │   - CalculatorTool: 计算电费                                    │
+     * │   - KnowledgeTool: 查询电力知识                                  │
+     * └─────────────────────────────────────────────────────────────────┘
+     * </pre>
+     */
+    private final Configuration freemarkerConfig = new Configuration(Configuration.VERSION_2_3_32);
+
+    {
+        // 初始化块（实例初始化器）：在构造函数执行后立即执行
+        // 设置数字格式：最多保留 6 位小数，避免不必要的科学计数法
+        // 例如：123.45 不会变成 123.450000，0.000001 不会被格式化为 1.0E-6
+        freemarkerConfig.setNumberFormat("0.######");
+
+        // 设置布尔值格式：使用英文 "true,false" 而不是默认的 "true,false"
+        // 这确保模板中的布尔判断行为一致
+        freemarkerConfig.setBooleanFormat("true,false");
+    }
+
+    /**
+     * 渲染提示词模板
+     *
+     * <p>核心功能：从数据库获取提示词模板，将变量注入其中，生成最终的提示词文本。
+     *
+     * <h3>执行流程：</h3>
+     * <pre>
+     * ┌─────────────────────────────────────────────────────────────────┐
+     * │ Step 1: 从数据库获取模板                                         │
+     * │ getByCode(promptCode) → SysPrompt 实体                          │
+     * │         ↓                                                       │
+     * │ 包含: content (JSON格式，含 template 字段)                      │
+     * │       templateType (FREEMARKER / TEXT)                          │
+     * └─────────────────────────────────────────────────────────────────┘
+     *                           ↓
+     * ┌─────────────────────────────────────────────────────────────────┐
+     * │ Step 2: 提取模板内容                                             │
+     * │ extractTemplate() → 从 JSON 的 "template" 字段提取字符串        │
+     * └─────────────────────────────────────────────────────────────────┘
+     *                           ↓
+     * ┌─────────────────────────────────────────────────────────────────┐
+     * │ Step 3: 根据模板类型渲染                                         │
+     * │ ┌──────────────────┬─────────────────────────────────────────┐  │
+     * │ │ FREEMARKER 类型  │ TEXT 类型                               │  │
+     * │ ├──────────────────┼─────────────────────────────────────────┤  │
+     * │ │ 使用 Freemarker  │ 直接返回原内容                          │  │
+     * │ │ 引擎解析变量     │ (不做任何处理)                          │  │
+     * │ │                  │                                         │  │
+     * │ │ ${name} → "张三" │ ${name} → "${name}"                     │  │
+     * │ └──────────────────┴─────────────────────────────────────────┘  │
+     * └─────────────────────────────────────────────────────────────────┘
+     *                           ↓
+     * ┌─────────────────────────────────────────────────────────────────┐
+     * │ Step 4: 缓存结果（Spring Cache）                                │
+     * │ @Cacheable: 相同的 promptCode + variables 会直接返回缓存结果    │
+     * │ key: "SYSTEM_RAG_v1.0_12345678" (promptCode + variables哈希)   │
+     * └─────────────────────────────────────────────────────────────────┘
+     * </pre>
+     *
+     * @param promptCode 提示词代码（如 "SYSTEM_RAG_v1.0"）
+     * @param variables 模板变量（如 {"userName": "张三", "tools": [...]}）
+     * @return 渲染后的提示词文本
+     * @throws IllegalArgumentException 提示词不存在
+     * @throws RuntimeException 渲染失败
+     */
+    @Override
+    @Cacheable(value = "sys_prompt_render", key = "#promptCode + '_' + #variables.hashCode()", unless = "#result == null")
+    public String render(String promptCode, Map<String, Object> variables) {
+        // Step 1: 从数据库获取提示词配置
+        SysPrompt prompt = this.getByCode(promptCode);
+        if (prompt == null) {
+            log.warn("Prompt not found: {}", promptCode);
+            throw new IllegalArgumentException("Prompt not found: " + promptCode);
+        }
+
+        // Step 2: 从 JSON 中提取模板字符串
+        // 数据库存储格式: {"template": "你好 ${name}...", "otherField": "...}
+        String templateContent = extractTemplate(prompt.getContent());
+        if (StrUtil.isBlank(templateContent)) {
+            return "";
+        }
+
+        // Step 3: 根据模板类型进行渲染
+        try {
+            if (TemplateType.FREEMARKER.equals(prompt.getTemplateType())) {
+                // FREEMARKER 类型：使用 Freemarker 引擎解析模板
+                // new Template(name, reader, config) - 从字符串创建模板
+                Template template = new Template(promptCode, new StringReader(templateContent), freemarkerConfig);
+                // 将变量注入模板，生成最终字符串
+                return FreeMarkerTemplateUtils.processTemplateIntoString(template, variables);
+            } else {
+                // TEXT 类型：直接返回模板内容，不做任何解析
+                // 注意：当前版本暂不支持 SPEL (Spring Expression Language)
+                return templateContent;
+            }
+        } catch (Exception e) {
+            log.error("Failed to render prompt [{}]: {}", promptCode, e.getMessage());
+            throw new RuntimeException("Prompt rendering failed", e);
+        }
+    }
 
     @Override
     public PageResult<PromptVO> selectPage(PromptQueryRequest request) {

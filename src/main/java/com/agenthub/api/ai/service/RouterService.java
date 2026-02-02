@@ -19,7 +19,6 @@ import java.util.List;
 @Deprecated
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class RouterService {
 
     private final ChatClient chatClient;
@@ -27,6 +26,14 @@ public class RouterService {
 
     // Spring 会自动注入所有实现了 AIUseCase 接口的 Bean (AuditUseCase, CalcUseCase, ChatUseCase)
     private final List<AIUseCase> useCases;
+
+    public RouterService(@org.springframework.beans.factory.annotation.Qualifier("workerChatClient") ChatClient chatClient,
+                         MemorySyncService memorySyncService,
+                         List<AIUseCase> useCases) {
+        this.chatClient = chatClient;
+        this.memorySyncService = memorySyncService;
+        this.useCases = useCases;
+    }
 
     public AIResponse handleRequest(AIRequest request) {
         // 1. 识别意图 (Intent Classification)

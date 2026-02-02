@@ -9,6 +9,7 @@ import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.stereotype.Component;
 import com.agenthub.api.ai.service.PowerKnowledgeService;
 
+@Deprecated
 @Slf4j
 @Component // 注册为 Spring Bean
 @RequiredArgsConstructor
