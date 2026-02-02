@@ -10,6 +10,7 @@ import com.agenthub.api.prompt.domain.vo.PromptVO;
 import com.agenthub.api.prompt.enums.PromptType;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * 提示词管理 Service
@@ -128,4 +129,14 @@ public interface ISysPromptService {
      * @return 是否成功
      */
     Boolean rollbackToVersion(Long promptId, Long versionId);
+
+    /**
+     * 渲染 Prompt
+     * 根据 promptCode 找到对应的 Prompt，并使用传入的变量进行渲染
+     *
+     * @param promptCode 提示词代码
+     * @param variables  上下文变量
+     * @return 渲染后的文本
+     */
+    String render(String promptCode, Map<String, Object> variables);
 }

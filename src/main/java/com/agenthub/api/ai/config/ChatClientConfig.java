@@ -7,6 +7,7 @@ import org.springframework.context.annotation.Configuration;
 /**
  * ChatClient 配置
  */
+@Deprecated
 @Configuration
 public class ChatClientConfig {
 

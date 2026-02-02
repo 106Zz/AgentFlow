@@ -93,6 +93,12 @@
             <artifactId>spring-boot-starter-validation</artifactId>
         </dependency>
 
+        <!-- Freemarker Template Engine -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-freemarker</artifactId>
+        </dependency>
+
         <!-- PGVector Store (Core) -->
         <dependency>
             <groupId>org.springframework.ai</groupId>
@@ -155,11 +161,11 @@
             <version>1.1.0.0-M5</version>
         </dependency>
 
-        <!-- DashScope SDK -->
+        <!-- DashScope SDK (2.19.4+ 支持深度思考模式 enableThinking) -->
         <dependency>
             <groupId>com.alibaba</groupId>
             <artifactId>dashscope-sdk-java</artifactId>
-            <version>2.16.7</version>
+            <version>2.22.5</version>
         </dependency>
 
         <!-- PostgreSQL + JDBC -->
