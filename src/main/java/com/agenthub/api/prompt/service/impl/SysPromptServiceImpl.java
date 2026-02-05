@@ -162,7 +162,7 @@ public class SysPromptServiceImpl extends ServiceImpl<SysPromptMapper, SysPrompt
      * @throws RuntimeException 渲染失败
      */
     @Override
-    @Cacheable(value = "sys_prompt_render", key = "#promptCode + '_' + #variables.hashCode()", unless = "#result == null")
+//    @Cacheable(value = "sys_prompt_render", key = "#promptCode + '_' + #variables.hashCode()", unless = "#result == null")
     public String render(String promptCode, Map<String, Object> variables) {
         // Step 1: 从数据库获取提示词配置
         SysPrompt prompt = this.getByCode(promptCode);

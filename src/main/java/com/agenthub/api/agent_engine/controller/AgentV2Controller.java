@@ -7,6 +7,7 @@ import com.agenthub.api.knowledge.service.IChatHistoryService;
 import com.agenthub.api.knowledge.service.IChatSessionService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.MediaType;
 import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -20,6 +21,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
 import java.util.UUID;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -32,7 +34,7 @@ public class AgentV2Controller {
     private final ChatAgent chatAgent;
     private final IChatHistoryService chatHistoryService;
     private final IChatSessionService chatSessionService;
-    
+    private final Executor taskExecutor;
     private final ExecutorService sseExecutor = Executors.newCachedThreadPool();
 
     @CrossOrigin(origins = "*", maxAge = 3600)
@@ -62,13 +64,20 @@ public class AgentV2Controller {
 
         log.info("接收 V2 Agent 请求: user={}, session={}", userIdLong, sessionId);
 
-        Long assistantIdVal = null;
-        try {
-            assistantIdVal = chatHistoryService.createChatSkeleton(sessionId, userIdLong, query);
-        } catch (Exception e) {
-            log.error("骨架创建失败", e);
-        }
-        final Long assistantId = assistantIdVal;
+        // ===== 骨架创建用通用线程池异步执行，不阻塞主线程 =====
+        final Long[] assistantIdHolder = {null};
+        taskExecutor.execute(() -> {
+            SecurityContextHolder.setContext(mainThreadSecurityContext);
+            try {
+                Long id = chatHistoryService.createChatSkeleton(sessionId, userIdLong, query);
+                assistantIdHolder[0] = id;
+                log.info("[骨架创建] 异步完成: session={}, id={}", sessionId, id);
+            } catch (Exception e) {
+                log.error("[骨架创建] 失败: session={}", sessionId, e);
+            } finally {
+                SecurityContextHolder.clearContext();
+            }
+        });
 
         AgentContext context = AgentContext.builder()
                 .query(query)
@@ -143,7 +152,7 @@ public class AgentV2Controller {
                         }
                         finalAnswer.append(contentBuffer);
                         
-                        handleComplete(sessionId, userIdLong, query, assistantId, finalAnswer.toString());
+                        handleComplete(sessionId, userIdLong, query, assistantIdHolder[0], finalAnswer.toString());
                         emitter.complete();
                     })
                     .doOnError(e -> {
@@ -154,7 +163,7 @@ public class AgentV2Controller {
                         }
                         partialAnswer.append(contentBuffer);
                         
-                        handleError(sessionId, assistantId, partialAnswer.toString(), e);
+                        handleError(sessionId, assistantIdHolder[0], partialAnswer.toString(), e);
                         emitter.completeWithError(e);
                     })
                     .subscribe();

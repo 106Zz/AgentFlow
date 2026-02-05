@@ -29,7 +29,7 @@ public class AuditTool implements AgentTool {
     public AgentToolDefinition getDefinition() {
         return AgentToolDefinition.builder()
                 .name("audit_contract")
-                .description("审查合同、标书或文档的合规性风险。必须在用户提供文档内容或明确要求审查时使用。")
+                .description("审查合同、标书或文档的合规性风险。当用户提供文档内容或要求审查合同时使用。")
                 .parameterSchema("""
                         {
                             "type": "object",
