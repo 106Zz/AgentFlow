@@ -9,7 +9,6 @@ import com.agenthub.api.search.dto.req.HybridSearchRequest;
 import com.agenthub.api.search.dto.result.HybridSearchResult;
 import com.agenthub.api.search.service.IHybridSearchService;
 import com.aliyun.oss.OSS;
-import com.aliyun.oss.OSSClientBuilder;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.document.Document;
@@ -31,17 +30,7 @@ public class PowerKnowledgeService {
         private final VectorStoreHelper vectorStoreHelper;
         private final DashScopeRerankerConfig dashScopeReranker;
         private final IHybridSearchService hybridSearchService;
-
-        // 注入 OSS 配置 (建议放在 application.yml 里)
-        // 根据你的截图，Region 是上海
-        @Value("${aliyun.oss.endpoint:https://oss-cn-shanghai.aliyuncs.com}")
-        private String ossEndpoint;
-
-        @Value("${aliyun.oss.accessKeyId}")
-        private String accessKeyId;
-
-        @Value("${aliyun.oss.accessKeySecret}")
-        private String accessKeySecret;
+        private final OSS ossClient;
 
         @Value("${aliyun.oss.bucketName:agenthub-knowledge}")
         private String bucketName;
@@ -263,7 +252,6 @@ public class PowerKnowledgeService {
          * 让前端用户可以下载私有 Bucket 里的文件，链接有效期 1 小时
          */
         private String generatePresignedUrl(String objectName) {
-                OSS ossClient = new OSSClientBuilder().build(ossEndpoint, accessKeyId, accessKeySecret);
                 try {
                         // 设置 URL 过期时间为 1 小时
                         Date expiration = new Date(new Date().getTime() + 3600 * 1000);
@@ -274,9 +262,6 @@ public class PowerKnowledgeService {
                 } catch (Exception e) {
                         log.error("生成 OSS 签名链接失败: {}", objectName, e);
                         return "";
-                } finally {
-                        // 一定要关闭 client，否则会连接泄露
-                        ossClient.shutdown();
                 }
         }
 

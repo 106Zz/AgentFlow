@@ -119,3 +119,12 @@ aliyun:
     accessKeySecret: iPeKcVDOV6N2biyQFLzZK1lnSyFk0U  # 请填写你的实际 AccessKeySecret
     bucketName: agenthub-knowledge
     urlPrefix: ''
+
+# Agent 工具配置
+agent:
+  tavily:
+    # Tavily Search API 配置（https://tavily.com）
+    # 获取方式：访问 https://app.tavily.com/home 注册并获取 API Key
+    api-key: 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
+    endpoint: https://api.tavily.com/search
+    max-results: 5
