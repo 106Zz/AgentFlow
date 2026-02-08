@@ -1,5 +1,8 @@
 package com.agenthub.api.agent_engine.config;
 
+import com.agenthub.api.agent_engine.model.AgentToolDefinition;
+import com.agenthub.api.agent_engine.model.ToolCall;
+import com.agenthub.api.agent_engine.tool.AgentTool;
 import com.agenthub.api.ai.domain.llm.DeepThinkResult;
 import com.agenthub.api.ai.domain.llm.StreamCallback;
 import com.alibaba.dashscope.aigc.generation.Generation;
@@ -10,12 +13,20 @@ import com.alibaba.dashscope.common.Role;
 import com.alibaba.dashscope.exception.ApiException;
 import com.alibaba.dashscope.exception.InputRequiredException;
 import com.alibaba.dashscope.exception.NoApiKeyException;
+import com.alibaba.dashscope.tools.FunctionDefinition;
+import com.alibaba.dashscope.tools.ToolCallBase;
+import com.alibaba.dashscope.tools.ToolCallFunction;
+import com.alibaba.dashscope.tools.ToolFunction;
+import com.alibaba.dashscope.utils.JsonUtils;
 import io.reactivex.Flowable;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
+import java.util.stream.Collectors;
 
 /**
  * DashScope 原生 SDK 服务
@@ -236,14 +247,137 @@ public class DashScopeNativeService {
         }
     }
 
+
     /**
-     * 简化版流式调用（使用默认系统提示）
+     * 流式深度思考调用 (支持工具，自动适配转换)
      *
      * @param model    模型名称
-     * @param prompt   用户提示
+     * @param messages 完整的消息列表
+     * @param agentTools 业务层工具列表
      * @param callback 流式回调接口
      */
-    public void deepThinkStream(String model, String prompt, StreamCallback callback) {
-        deepThinkStream(model, prompt, null, callback);
+    public void deepThinkStream(
+            String model,
+            java.util.List<Message> messages,
+            List<AgentTool> agentTools,
+            StreamCallback callback
+    ) {
+        Generation gen = new Generation();
+
+        GenerationParam.GenerationParamBuilder paramBuilder = GenerationParam.builder()
+                .apiKey(apiKey)
+                .model(model)
+                .enableThinking(true)
+                .incrementalOutput(true)
+                .resultFormat("message")
+                .messages(messages);
+
+        // 内部适配：将 AgentTool 转换为 DashScope FunctionDefinition
+        if (agentTools != null && !agentTools.isEmpty()) {
+            List<ToolFunction> toolFunctions = agentTools.stream()
+                    .map(this::convertToFunctionDefinition)
+                    .filter(java.util.Objects::nonNull)
+                    .map(f -> ToolFunction.builder().function(f).build())
+                    .collect(Collectors.toList());
+            paramBuilder.tools(toolFunctions);
+        }
+
+        GenerationParam param = paramBuilder.build();
+
+        try {
+            Flowable<GenerationResult> result = gen.streamCall(param);
+
+            result.blockingForEach(chunk -> {
+                var choice = chunk.getOutput().getChoices().get(0);
+                var message = choice.getMessage();
+
+                String reasoning = message.getReasoningContent();
+                String content = message.getContent();
+                List<ToolCallBase> toolCalls = message.getToolCalls();
+
+                // 1. 处理思考过程
+                if (reasoning != null && !reasoning.isEmpty()) {
+                    callback.onReasoning(reasoning);
+                }
+
+                // 2. 处理内容
+                if (content != null && !content.isEmpty()) {
+                    callback.onContent(content);
+                }
+
+                // 3. 处理工具调用 (仅在结束时处理完整调用，简化逻辑)
+                if ("tool_calls".equals(choice.getFinishReason())) {
+                    List<ToolCallBase> finalToolCalls = message.getToolCalls();
+                    log.debug("[DashScope] 收到工具调用: finishReason={}, toolCalls数量={}",
+                            choice.getFinishReason(), finalToolCalls != null ? finalToolCalls.size() : 0);
+
+                    if (finalToolCalls != null && !finalToolCalls.isEmpty()) {
+                        List<com.agenthub.api.agent_engine.model.ToolCall> myToolCalls = new ArrayList<>();
+                        for (ToolCallBase tc : finalToolCalls) {
+                            log.debug("[DashScope] 工具调用类型: {}, toString: {}", tc.getClass().getSimpleName(), tc);
+
+                            if (tc instanceof ToolCallFunction) {
+                                ToolCallFunction tcf = (ToolCallFunction) tc;
+                                try {
+                                    String toolName = tcf.getFunction() != null ? tcf.getFunction().getName() : null;
+                                    String parameters = tcf.getFunction() != null ? tcf.getFunction().getArguments() : null;
+
+                                    log.info("[DashScope] 解析工具调用: id={}, name={}, args={}",
+                                            tcf.getId(), toolName, parameters);
+
+                                    if (toolName != null) {
+                                        myToolCalls.add(ToolCall.builder()
+                                                .callId(tcf.getId())
+                                                .toolName(toolName)
+                                                .parameters(parameters != null ? parameters : "")
+                                                .build());
+                                    } else {
+                                        log.warn("[DashScope] 工具名称为空，跳过此调用: tc={}", tc);
+                                    }
+                                } catch (Exception e) {
+                                    log.error("[DashScope] 解析工具调用失败: tc={}", tc, e);
+                                }
+                            } else {
+                                log.warn("[DashScope] 工具调用类型不是 ToolCallFunction: {}", tc.getClass().getName());
+                            }
+                        }
+
+                        if (!myToolCalls.isEmpty()) {
+                            callback.onToolCall(myToolCalls);
+                        } else {
+                            log.warn("[DashScope] 没有有效的工具调用可执行");
+                        }
+                    }
+                }
+            });
+            callback.onComplete();
+        } catch (NoApiKeyException | ApiException | InputRequiredException e) {
+            log.error("DashScope 流式调用失败: {}", e.getMessage(), e);
+            callback.onError(e);
+            throw new RuntimeException("AI 流式调用失败: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 内部转换逻辑：AgentTool -> FunctionDefinition
+     */
+    private FunctionDefinition convertToFunctionDefinition(AgentTool tool) {
+        try {
+            AgentToolDefinition def = tool.getDefinition();
+            String desc = def.getDescription();
+            // 简单的描述清洗
+            if (desc != null && desc.contains("(参数:")) {
+                desc = desc.substring(0, desc.indexOf("(参数:")).trim();
+            }
+            
+            return FunctionDefinition.builder()
+                    .name(def.getName())
+                    .description(desc)
+                    .parameters(JsonUtils.parseString(def.getParameterSchema()).getAsJsonObject())
+                    .build();
+        } catch (Exception e) {
+            log.warn("[DashScopeNativeService] 工具转换失败: {}", tool.getDefinition().getName(), e);
+            return null;
+        }
     }
 }

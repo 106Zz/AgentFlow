@@ -176,4 +176,17 @@ public class ToolRegistry implements ApplicationListener<ContextRefreshedEvent> 
     public int getToolCount() {
         return toolNameIndex.size();
     }
+
+    /**
+     * 获取工具列表 (支持过滤)
+     * <p>用于获取 AgentTool 业务对象列表</p>
+     *
+     * @param excludeToolNames 需要排除的工具名称集合
+     * @return 过滤后的 AgentTool 列表
+     */
+    public List<AgentTool> getTools(Set<String> excludeToolNames) {
+        return toolNameIndex.values().stream()
+                .filter(tool -> excludeToolNames == null || !excludeToolNames.contains(tool.getDefinition().getName()))
+                .collect(Collectors.toList());
+    }
 }
