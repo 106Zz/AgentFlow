@@ -23,8 +23,6 @@ import reactor.core.publisher.Flux;
 
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -46,7 +44,7 @@ import java.util.stream.Collectors;
  * │  1. 意图识别 (IntentRecognition)                                    │
  * │     └─ 识别用户意图: KB_QA / CHAT / UNKNOWN                       │
  * ├─────────────────────────────────────────────────────────────────────┤
- * │  2. 预检索 (PreRetrieval) - 仅 KB_QA 且高置信度                       │
+ * │  2. 预检索 (PreRetrieval) - 仅 KB_QA                                │
  * │     └─ 调用 knowledge_search → 获取 EvidenceBlock                  │
  * ├─────────────────────────────────────────────────────────────────────┤
  * │  3. 构建消息 (BuildMessages)                                         │
@@ -98,14 +96,7 @@ public class SinglePassExecutor {
     /**
      * 系统提示词模板代码
      */
-    private static final String SYSTEM_PROMPT_CODE = "SYSTEM-RAG-v1.0";
-
-    /**
-     * JSON 块提取正则 (用于提取工具调用)
-     */
-    private static final Pattern JSON_BLOCK_PATTERN = Pattern.compile(
-            "```json\\s*(\\{.*?\\})\\s*```", Pattern.DOTALL
-    );
+    private static final String SYSTEM_PROMPT_CODE = "SYSTEM-RAG-LITE";
 
     // ==================== 构造器 ====================
 
@@ -156,7 +147,7 @@ public class SinglePassExecutor {
                 log.info("[SinglePass] 意图识别结果: intent={}, confidence={}, needsPreRetrieval={}",
                         intentResult.intent(), intentResult.confidence(), intentResult.needsPreRetrieval());
 
-                // ==================== 2. 预检索 (仅 KB_QA 且高置信度) ====================
+                // ==================== 2. 预检索 (仅 KB_QA) ====================
                 String evidenceContext = "";
                 if (intentResult.needsPreRetrieval()) {
                     log.info("[SinglePass] 触发预检索: query={}", context.getQuery());
@@ -429,6 +420,7 @@ public class SinglePassExecutor {
     /**
      * 流式 LLM 调用
      * <p>使用 DashScopeNativeService 获取深度思考模型的流式输出</p>
+     * <p>支持工具调用：当 LLM 决定调用工具时，会执行工具并基于结果生成最终回答</p>
      *
      * @param messages 消息列表
      * @param context  Agent 上下文
@@ -439,18 +431,21 @@ public class SinglePassExecutor {
         List<com.alibaba.dashscope.common.Message> dashMessages = convertToDashScopeMessages(messages);
 
         // 准备工具列表
-        Set<String> excludedTools = new HashSet<>();
-        // 如果预检索已完成，排除 knowledge_search
+        List<AgentTool> tools;
         if (context.isPreRetrievalDone()) {
-            excludedTools.add("knowledge_search");
+            // 预检索已完成：答案已在上下文中，不需要任何工具
+            tools = List.of();
+            log.debug("[SinglePass] 预检索已完成，不传任何工具给 LLM");
+        } else {
+            // 预检索未完成：按需传递工具
+            tools = toolRegistry.getTools(Set.of());
+            log.debug("[SinglePass] 调用 LLM，携带工具数量: {}", tools.size());
         }
-        
-        // 获取业务工具列表 (AgentTool)
-        List<AgentTool> tools = toolRegistry.getTools(excludedTools);
-        log.debug("[SinglePass] 调用 LLM，携带工具数量: {}", tools.size());
 
         return Flux.create(sink -> {
             final boolean[] state = new boolean[]{false, false}; // [0]=思考已开始, [1]=思考已结束
+            final List<ToolCall> pendingToolCalls = new ArrayList<>();
+            final boolean[] toolCallTriggered = new boolean[]{false};
 
             nativeService.deepThinkStream(WORKER_MODEL, dashMessages, tools, new StreamCallback() {
                 @Override
@@ -477,28 +472,19 @@ public class SinglePassExecutor {
 
                 @Override
                 public void onToolCall(List<ToolCall> toolCalls) {
-                    // 当模型决定调用工具时
-                    if (state[0] && !state[1]) {
-                        sink.next("@@THINK_END@@");
-                        state[1] = true;
-                    }
-
                     if (toolCalls == null || toolCalls.isEmpty()) {
-                        log.warn("[SinglePass] 工具调用列表为空");
                         return;
                     }
+                    // 记录工具调用
+                    pendingToolCalls.addAll(toolCalls);
+                    toolCallTriggered[0] = true;
 
                     for (ToolCall tc : toolCalls) {
-                        if (tc == null || tc.toolName() == null) {
-                            log.warn("[SinglePass] 跳过无效的工具调用: tc={}", tc);
-                            continue;
+                        if (tc != null && tc.toolName() != null) {
+                            log.info("[SinglePass] LLM 调用工具: toolName={}, parameters={}",
+                                    tc.toolName(), tc.parameters());
+                            sink.next(String.format("\n\n> 🛠️ 调用工具: `%s`\n", tc.toolName()));
                         }
-                        log.info("[SinglePass] 模型触发工具调用: toolName={}, parameters={}",
-                                tc.toolName(), tc.parameters());
-                        // 格式化输出给前端
-                        String toolCallMsg = String.format("\n\n> 🛠️ **系统调用工具**: `%s`\n> 参数: `%s`\n",
-                            tc.toolName(), tc.parameters() != null ? tc.parameters() : "");
-                        sink.next(toolCallMsg);
                     }
                 }
 
@@ -508,7 +494,13 @@ public class SinglePassExecutor {
                     if (state[0] && !state[1]) {
                         sink.next("@@THINK_END@@");
                     }
-                    sink.complete();
+
+                    // 如果有工具调用需要执行，执行工具并继续
+                    if (toolCallTriggered[0] && !pendingToolCalls.isEmpty()) {
+                        executeToolsAndContinue(pendingToolCalls, messages, context, sink, state);
+                    } else {
+                        sink.complete();
+                    }
                 }
 
                 @Override
@@ -518,6 +510,172 @@ public class SinglePassExecutor {
                 }
             });
         });
+    }
+
+    /**
+     * 执行工具调用并基于结果继续生成
+     */
+    private void executeToolsAndContinue(
+            List<ToolCall> toolCalls,
+            List<Message> originalMessages,
+            AgentContext context,
+            reactor.core.publisher.FluxSink<String> sink,
+            boolean[] state) {
+
+        log.info("[SinglePass] 开始执行工具，数量: {}", toolCalls.size());
+
+        // 异步执行工具
+        CompletableFuture.runAsync(() -> {
+            Map<String, String> toolResults = new LinkedHashMap<>();
+
+            for (ToolCall tc : toolCalls) {
+                if (tc == null || tc.toolName() == null) {
+                    continue;
+                }
+
+                String toolName = tc.toolName();
+                String parameters = tc.parameters() != null ? tc.parameters() : "{}";
+
+                try {
+                    AgentTool tool = toolRegistry.getTool(toolName);
+                    if (tool == null) {
+                        String errorMsg = String.format("工具 '%s' 不存在", toolName);
+                        sink.next("\n\n" + errorMsg + "\n");
+                        toolResults.put(toolName, errorMsg);
+                        continue;
+                    }
+
+                    // 解析参数
+                    Map<String, Object> argsMap = parseParameters(parameters);
+
+                    // 执行工具
+                    ToolExecutionRequest request = ToolExecutionRequest.builder()
+                            .toolName(toolName)
+                            .arguments(argsMap)
+                            .originalCallId(tc.callId())
+                            .build();
+
+                    ToolExecutionResult result = tool.execute(request, context);
+
+                    if (result.isSuccess()) {
+                        toolResults.put(toolName, result.getOutput() != null ? result.getOutput() : "");
+                        sink.next("\n\n✅ 工具执行完成\n");
+                    } else {
+                        String errorMsg = String.format("工具执行失败: %s",
+                                result.getErrorMessage() != null ? result.getErrorMessage() : "未知错误");
+                        sink.next("\n\n" + errorMsg + "\n");
+                        toolResults.put(toolName, errorMsg);
+                    }
+
+                } catch (Exception e) {
+                    log.error("[SinglePass] 工具执行异常: toolName={}", toolName, e);
+                    String errorMsg = String.format("工具执行异常: %s", e.getMessage());
+                    sink.next("\n\n" + errorMsg + "\n");
+                    toolResults.put(toolName, errorMsg);
+                }
+            }
+
+            // 继续生成最终回答
+            continueAfterTools(originalMessages, toolResults, context, sink, state);
+
+        }).exceptionally(e -> {
+            log.error("[SinglePass] 工具执行异步异常", e);
+            sink.next("\n\n【系统错误】工具执行过程中发生异常\n");
+            sink.complete();
+            return null;
+        });
+    }
+
+    /**
+     * 工具执行完成后，继续调用 LLM 生成最终回答
+     */
+    private void continueAfterTools(
+            List<Message> originalMessages,
+            Map<String, String> toolResults,
+            AgentContext context,
+            reactor.core.publisher.FluxSink<String> sink,
+            boolean[] state) {
+
+        log.info("[SinglePass] 工具执行完成，生成最终回答");
+
+        // 构建新的消息列表
+        List<Message> newMessages = new ArrayList<>(originalMessages);
+
+        // 添加工具结果
+        StringBuilder toolResultsMsg = new StringBuilder("【工具执行结果】\n");
+        for (Map.Entry<String, String> entry : toolResults.entrySet()) {
+            String result = entry.getValue();
+            if (result.length() > 5000) {
+                result = result.substring(0, 5000) + "\n\n...(结果过长，已截断)";
+            }
+            toolResultsMsg.append(String.format("**%s**: %s\n\n", entry.getKey(), result));
+        }
+        newMessages.add(new UserMessage(toolResultsMsg.toString()));
+
+        // 转换为 DashScope 格式
+        List<com.alibaba.dashscope.common.Message> dashMessages = convertToDashScopeMessages(newMessages);
+
+        // 不传工具，避免循环调用
+        sink.next("\n\n🤖 基于工具结果生成回答...\n");
+
+        nativeService.deepThinkStream(WORKER_MODEL, dashMessages, List.of(), new StreamCallback() {
+            @Override
+            public void onReasoning(String reasoning) {
+                if (!state[0]) {
+                    sink.next("@@THINK_START@@");
+                    state[0] = true;
+                }
+                if (reasoning != null && !reasoning.isEmpty()) {
+                    sink.next(reasoning);
+                }
+            }
+
+            @Override
+            public void onContent(String content) {
+                if (state[0] && !state[1]) {
+                    sink.next("@@THINK_END@@");
+                    state[1] = true;
+                }
+                if (content != null && !content.isEmpty()) {
+                    sink.next(content);
+                }
+            }
+
+            @Override
+            public void onToolCall(List<ToolCall> toolCalls) {
+                log.warn("[SinglePass] 第二轮 LLM 不应再调用工具");
+            }
+
+            @Override
+            public void onComplete() {
+                if (state[0] && !state[1]) {
+                    sink.next("@@THINK_END@@");
+                }
+                sink.complete();
+            }
+
+            @Override
+            public void onError(Throwable e) {
+                log.error("[SinglePass] 第二轮 LLM 调用失败", e);
+                sink.error(e);
+            }
+        });
+    }
+
+    /**
+     * 解析工具参数
+     */
+    private Map<String, Object> parseParameters(String parameters) {
+        try {
+            if (parameters == null || parameters.isBlank()) {
+                return new HashMap<>();
+            }
+            return objectMapper.readValue(parameters,
+                    new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
+        } catch (Exception e) {
+            log.warn("[SinglePass] 解析工具参数失败: {}, error={}", parameters, e.getMessage());
+            return new HashMap<>();
+        }
     }
 
     /**

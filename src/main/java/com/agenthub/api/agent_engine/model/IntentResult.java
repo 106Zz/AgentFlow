@@ -27,7 +27,8 @@ public record IntentResult(
     // ============== 静态工厂方法 ==============
 
     public static IntentResult kbQa(double confidence, String reasoning) {
-        return new IntentResult(IntentType.KB_QA, confidence, reasoning, confidence >= 0.7);
+        // 修复：KB_QA 意图总是触发预检索，不再检查置信度阈值
+        return new IntentResult(IntentType.KB_QA, confidence, reasoning, true);
     }
 
     public static IntentResult chat(double confidence, String reasoning) {

@@ -40,21 +40,21 @@ public class IntentRecognitionService {
     private static final String PROMPT_CODE = "ROUTER-INTENT-v1.0";
 
     /**
-     * 广东电力市场相关关键词 (用于规则匹配)
+     * 广东电力市场相关关键词 + 明确的检索意图关键词 (用于规则匹配)
      */
     private static final List<String> KB_KEYWORDS = List.of(
+            // 电力市场专业术语
             "电价", "电费", "结算", "考核", "偏差", "市场化", "交易",
             "售电", "购电", "输配电", "政府定价", "输电费",
             "容量电费", "需量电费", "功率因数", "力调", "力率",
             "峰谷平", "分时电价", "尖峰", "低谷", "峰谷",
             "中长期", "现货", "批发", "零售", "辅助服务",
-            "调峰", "调频", "备用", "无功", "补偿"
+            "调峰", "调频", "备用", "无功", "补偿",
+            // 明确的检索意图关键词 (高优先级)
+            "知识库", "检索", "查询", "搜索", "查找", "文档",
+            "政策", "文件", "规定", "标准", "规则", "办法",
+            "目标", "规划", "发展目标"
     );
-
-    /**
-     * 高置信度阈值
-     */
-    private static final double HIGH_CONFIDENCE_THRESHOLD = 0.7;
 
     /**
      * 关键词匹配高置信度阈值 (2个以上关键词)
@@ -189,14 +189,35 @@ public class IntentRecognitionService {
             return IntentResult.chat(0.5, "提示词未配置，默认 CHAT");
         }
 
-        // content 直接存储纯文本提示词
-        String systemPromptText = sysPrompt.getContent().asText();
+        // 从 JSON 中提取 template 字段
+        String systemPromptText;
+        try {
+            com.fasterxml.jackson.databind.JsonNode contentNode = sysPrompt.getContent();
+            if (contentNode.has("template")) {
+                systemPromptText = contentNode.get("template").asText();
+            } else {
+                // 降级：如果没有 template 字段，使用整个 content
+                systemPromptText = contentNode.asText();
+            }
+        } catch (Exception e) {
+            log.warn("[Intent] 解析提示词内容失败: {}, 使用降级方案", e.getMessage());
+            return IntentResult.chat(0.5, "提示词解析失败，默认 CHAT");
+        }
+
+        if (systemPromptText == null || systemPromptText.isEmpty()) {
+            log.warn("[Intent] 提示词内容为空，使用降级方案");
+            return IntentResult.chat(0.5, "提示词内容为空，默认 CHAT");
+        }
+
+        log.debug("[Intent] 使用提示词: {}", systemPromptText.substring(0, Math.min(100, systemPromptText.length())));
 
         String response = intentChatClient.prompt()
                 .system(systemPromptText)
                 .user(query)
                 .call()
                 .content();
+
+        log.debug("[Intent] LLM返回: {}", response);
 
         return parseIntentResult(response);
     }
@@ -226,8 +247,8 @@ public class IntentRecognitionService {
                 intent = IntentType.CHAT;
             }
 
-            boolean needsPreRetrieval = intent == IntentType.KB_QA
-                    && confidence >= HIGH_CONFIDENCE_THRESHOLD;
+            // 修复：预检索条件放宽，只要识别为 KB_QA 就预检索
+            boolean needsPreRetrieval = intent == IntentType.KB_QA;
 
             return new IntentResult(intent, confidence, reasoning, needsPreRetrieval);
 
