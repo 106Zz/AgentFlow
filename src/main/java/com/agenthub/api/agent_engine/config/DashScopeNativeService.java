@@ -302,6 +302,16 @@ public class DashScopeNativeService {
                 String content = message.getContent();
                 List<ToolCallBase> toolCalls = message.getToolCalls();
 
+                // 调试：记录 reasoning 和 content 的内容
+                if (reasoning != null && !reasoning.isEmpty()) {
+                    log.info("[DashScope] reasoning 长度={}, 内容预览={}",
+                            reasoning.length(), reasoning.substring(0, Math.min(50, reasoning.length())));
+                }
+                if (content != null && !content.isEmpty()) {
+                    log.info("[DashScope] content 长度={}, 内容预览={}",
+                            content.length(), content.substring(0, Math.min(50, content.length())));
+                }
+
                 // 1. 处理思考过程
                 if (reasoning != null && !reasoning.isEmpty()) {
                     callback.onReasoning(reasoning);
