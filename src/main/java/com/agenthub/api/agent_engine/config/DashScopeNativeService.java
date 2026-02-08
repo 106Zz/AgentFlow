@@ -1,5 +1,6 @@
 package com.agenthub.api.agent_engine.config;
 
+import cn.hutool.json.JSONObject;
 import com.agenthub.api.agent_engine.model.AgentToolDefinition;
 import com.agenthub.api.agent_engine.model.ToolCall;
 import com.agenthub.api.agent_engine.tool.AgentTool;
@@ -287,6 +288,12 @@ public class DashScopeNativeService {
         try {
             Flowable<GenerationResult> result = gen.streamCall(param);
 
+            // 用于累积流式工具调用参数
+            // DeepSeek 在 incrementalOutput=true 模式下，参数是分段返回的
+            final StringBuilder[] accumulatedArgs = new StringBuilder[1];
+            final String[] currentToolName = new String[1];
+            final String[] currentCallId = new String[1];
+
             result.blockingForEach(chunk -> {
                 var choice = chunk.getOutput().getChoices().get(0);
                 var message = choice.getMessage();
@@ -305,47 +312,80 @@ public class DashScopeNativeService {
                     callback.onContent(content);
                 }
 
-                // 3. 处理工具调用 (仅在结束时处理完整调用，简化逻辑)
-                if ("tool_calls".equals(choice.getFinishReason())) {
-                    List<ToolCallBase> finalToolCalls = message.getToolCalls();
-                    log.debug("[DashScope] 收到工具调用: finishReason={}, toolCalls数量={}",
-                            choice.getFinishReason(), finalToolCalls != null ? finalToolCalls.size() : 0);
+                // 3. 处理工具调用
+                // DeepSeek 流式模式：参数是分段返回的，需要累积
+                boolean hasToolCallFromApi = toolCalls != null && !toolCalls.isEmpty();
 
-                    if (finalToolCalls != null && !finalToolCalls.isEmpty()) {
-                        List<com.agenthub.api.agent_engine.model.ToolCall> myToolCalls = new ArrayList<>();
-                        for (ToolCallBase tc : finalToolCalls) {
-                            log.debug("[DashScope] 工具调用类型: {}, toString: {}", tc.getClass().getSimpleName(), tc);
+                if (hasToolCallFromApi) {
+                    for (ToolCallBase tc : toolCalls) {
+                        if (tc instanceof ToolCallFunction tcf) {
+                            String id = tcf.getId();
+                            String name = tcf.getFunction() != null ? tcf.getFunction().getName() : null;
+                            String args = tcf.getFunction() != null ? tcf.getFunction().getArguments() : null;
+                            String finishReason = choice.getFinishReason();
 
-                            if (tc instanceof ToolCallFunction) {
-                                ToolCallFunction tcf = (ToolCallFunction) tc;
-                                try {
-                                    String toolName = tcf.getFunction() != null ? tcf.getFunction().getName() : null;
-                                    String parameters = tcf.getFunction() != null ? tcf.getFunction().getArguments() : null;
+                            log.debug("[DashScope] 工具调用块: id={}, name={}, args={}, finishReason={}",
+                                    id, name, args != null ? args.substring(0, Math.min(50, args.length())) : "null", finishReason);
 
-                                    log.info("[DashScope] 解析工具调用: id={}, name={}, args={}",
-                                            tcf.getId(), toolName, parameters);
-
-                                    if (toolName != null) {
-                                        myToolCalls.add(ToolCall.builder()
-                                                .callId(tcf.getId())
-                                                .toolName(toolName)
-                                                .parameters(parameters != null ? parameters : "")
-                                                .build());
-                                    } else {
-                                        log.warn("[DashScope] 工具名称为空，跳过此调用: tc={}", tc);
-                                    }
-                                } catch (Exception e) {
-                                    log.error("[DashScope] 解析工具调用失败: tc={}", tc, e);
-                                }
-                            } else {
-                                log.warn("[DashScope] 工具调用类型不是 ToolCallFunction: {}", tc.getClass().getName());
+                            // 累积工具名称和ID（从第一个非空块获取）
+                            if (name != null && !name.isBlank() && currentToolName[0] == null) {
+                                currentToolName[0] = name;
+                                currentCallId[0] = id != null ? id : "";
                             }
-                        }
 
-                        if (!myToolCalls.isEmpty()) {
-                            callback.onToolCall(myToolCalls);
-                        } else {
-                            log.warn("[DashScope] 没有有效的工具调用可执行");
+                            // 累积参数（增量追加）
+                            if (args != null && !args.isBlank()) {
+                                if (accumulatedArgs[0] == null) {
+                                    accumulatedArgs[0] = new StringBuilder(args);
+                                } else {
+                                    // 增量追加：跳过已经包含的部分
+                                    String existing = accumulatedArgs[0].toString();
+                                    if (!existing.equals(args)) {
+                                        // 简单的增量追加逻辑
+                                        if (args.length() > existing.length() && args.startsWith(existing)) {
+                                            accumulatedArgs[0] = new StringBuilder(args);
+                                        } else if (!existing.startsWith(args)) {
+                                            // 如果新内容不是已累积内容的前缀，直接追加
+                                            accumulatedArgs[0].append(args);
+                                        }
+                                    }
+                                }
+                            }
+
+                            // 当 finish_reason=tool_calls 时，参数已完整，触发回调
+                            if ("tool_calls".equals(finishReason)) {
+                                String finalToolName = currentToolName[0];
+                                String finalArgs = accumulatedArgs[0] != null ? accumulatedArgs[0].toString() : "{}";
+
+                                // 验证参数完整性，确保以 { 开头和 } 结尾
+                                if (finalArgs != null && !finalArgs.isEmpty() && !finalArgs.equals("{}")) {
+                                    // 确保是有效的 JSON
+                                    if (!finalArgs.startsWith("{")) {
+                                        finalArgs = "{" + finalArgs;
+                                    }
+                                    if (!finalArgs.endsWith("}")) {
+                                        finalArgs = finalArgs + "}";
+                                    }
+                                }
+
+                                log.info("[DashScope] 工具调用完成: tool={}, args={}, callId={}",
+                                        finalToolName, finalArgs, currentCallId[0]);
+
+                                if (finalToolName != null && !finalToolName.isBlank()) {
+                                    List<com.agenthub.api.agent_engine.model.ToolCall> myToolCalls = new ArrayList<>();
+                                    myToolCalls.add(ToolCall.builder()
+                                            .callId(currentCallId[0] != null ? currentCallId[0] : "")
+                                            .toolName(finalToolName)
+                                            .parameters(finalArgs != null && !finalArgs.isBlank() ? finalArgs : "{}")
+                                            .build());
+                                    callback.onToolCall(myToolCalls);
+                                }
+
+                                // 重置累积器，支持后续可能的工具调用
+                                accumulatedArgs[0] = null;
+                                currentToolName[0] = null;
+                                currentCallId[0] = null;
+                            }
                         }
                     }
                 }

@@ -178,6 +178,16 @@ public class ToolRegistry implements ApplicationListener<ContextRefreshedEvent> 
     }
 
     /**
+     * 获取所有工具名称
+     * <p>用于需要排除所有工具的场景</p>
+     *
+     * @return 所有工具名称的不可变集合
+     */
+    public Set<String> getAllToolNames() {
+        return Set.copyOf(toolNameIndex.keySet());
+    }
+
+    /**
      * 获取工具列表 (支持过滤)
      * <p>用于获取 AgentTool 业务对象列表</p>
      *
