@@ -18,6 +18,8 @@ import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.security.core.context.SecurityContext;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.util.StringUtils;
 import reactor.core.publisher.Flux;
 
@@ -248,6 +250,8 @@ public class SinglePassExecutor {
     /**
      * 加载最近的历史消息
      * <p>从 ChatMemoryRepository 加载，并进行滑动窗口控制</p>
+     * <p>注意：会过滤掉历史消息中的 @@THINK_START@@ 和 @@THINK_END@@ 标签，
+     * 防止模型在后续回答中模仿这些内部标记</p>
      */
     private List<Message> loadRecentHistory(String sessionId) {
         try {
@@ -256,14 +260,34 @@ public class SinglePassExecutor {
                 return new ArrayList<>();
             }
 
-            // 滑动窗口控制 (保留最近 MEMORY_WINDOW_SIZE 条)
-            if (allHistory.size() > MEMORY_WINDOW_SIZE) {
-                log.debug("[SinglePass] 历史记录超过窗口大小: {} -> {} (保留最近{}条)",
-                        allHistory.size(), MEMORY_WINDOW_SIZE, MEMORY_WINDOW_SIZE);
-                return allHistory.subList(allHistory.size() - MEMORY_WINDOW_SIZE, allHistory.size());
+            // 过滤掉历史消息中的思考标签，防止模型模仿
+            List<Message> filteredHistory = new ArrayList<>();
+            for (Message msg : allHistory) {
+                if (msg instanceof AssistantMessage assistantMsg) {
+                    String originalContent = assistantMsg.getText();
+                    if (originalContent != null) {
+                        // 移除 @@THINK_START@@ ... @@THINK_END@@ 标签及其内容
+                        // 这样思考过程不会传给模型，但模型仍然可以基于之前的正式回答继续对话
+                        String filteredContent = originalContent.replaceAll("@@THINK_START@@.*?@@THINK_END@@", "").trim();
+                        // 创建新的 AssistantMessage，保留原消息的其他属性（如 metadata）
+                        filteredHistory.add(new AssistantMessage(filteredContent));
+                    } else {
+                        filteredHistory.add(assistantMsg);
+                    }
+                } else {
+                    // UserMessage 和其他类型消息保持原样
+                    filteredHistory.add(msg);
+                }
             }
 
-            return allHistory;
+            // 滑动窗口控制 (保留最近 MEMORY_WINDOW_SIZE 条)
+            if (filteredHistory.size() > MEMORY_WINDOW_SIZE) {
+                log.debug("[SinglePass] 历史记录超过窗口大小: {} -> {} (保留最近{}条)",
+                        filteredHistory.size(), MEMORY_WINDOW_SIZE, MEMORY_WINDOW_SIZE);
+                return filteredHistory.subList(filteredHistory.size() - MEMORY_WINDOW_SIZE, filteredHistory.size());
+            }
+
+            return filteredHistory;
 
         } catch (Exception e) {
             log.error("[SinglePass] 加载历史记录失败: sessionId={}", sessionId, e);
@@ -520,59 +544,81 @@ public class SinglePassExecutor {
 
         log.info("[SinglePass] 开始执行工具，数量: {}", toolCalls.size());
 
+        // 关键点：在主线程捕获 SecurityContext，防止异步线程丢失认证信息
+        SecurityContext mainThreadSecurityContext = SecurityContextHolder.getContext();
+
         // 异步执行工具
         CompletableFuture.runAsync(() -> {
+            // 在异步线程中设置 SecurityContext
+            SecurityContextHolder.setContext(mainThreadSecurityContext);
+
             Map<String, String> toolResults = new LinkedHashMap<>();
+            boolean hasFailure = false;
 
-            for (ToolCall tc : toolCalls) {
-                if (tc == null || tc.toolName() == null) {
-                    continue;
-                }
-
-                String toolName = tc.toolName();
-                String parameters = tc.parameters() != null ? tc.parameters() : "{}";
-
-                try {
-                    AgentTool tool = toolRegistry.getTool(toolName);
-                    if (tool == null) {
-                        String errorMsg = String.format("工具 '%s' 不存在", toolName);
-                        sink.next("\n\n" + errorMsg + "\n");
-                        toolResults.put(toolName, errorMsg);
+            try {
+                for (ToolCall tc : toolCalls) {
+                    if (tc == null || tc.toolName() == null) {
                         continue;
                     }
 
-                    // 解析参数
-                    Map<String, Object> argsMap = parseParameters(parameters);
+                    String toolName = tc.toolName();
+                    String parameters = tc.parameters() != null ? tc.parameters() : "{}";
 
-                    // 执行工具
-                    ToolExecutionRequest request = ToolExecutionRequest.builder()
-                            .toolName(toolName)
-                            .arguments(argsMap)
-                            .originalCallId(tc.callId())
-                            .build();
+                    try {
+                        AgentTool tool = toolRegistry.getTool(toolName);
+                        if (tool == null) {
+                            String errorMsg = String.format("工具 '%s' 不存在", toolName);
+                            sink.next("\n\n" + errorMsg + "\n");
+                            toolResults.put(toolName, errorMsg);
+                            hasFailure = true;
+                            continue;
+                        }
 
-                    ToolExecutionResult result = tool.execute(request, context);
+                        // 解析参数
+                        Map<String, Object> argsMap = parseParameters(parameters);
 
-                    if (result.isSuccess()) {
-                        toolResults.put(toolName, result.getOutput() != null ? result.getOutput() : "");
-                        sink.next("\n\n✅ 工具执行完成\n");
-                    } else {
-                        String errorMsg = String.format("工具执行失败: %s",
-                                result.getErrorMessage() != null ? result.getErrorMessage() : "未知错误");
+                        // 执行工具
+                        ToolExecutionRequest request = ToolExecutionRequest.builder()
+                                .toolName(toolName)
+                                .arguments(argsMap)
+                                .originalCallId(tc.callId())
+                                .build();
+
+                        ToolExecutionResult result = tool.execute(request, context);
+
+                        if (result.isSuccess()) {
+                            toolResults.put(toolName, result.getOutput() != null ? result.getOutput() : "");
+                        } else {
+                            String errorMsg = String.format("工具执行失败: %s",
+                                    result.getErrorMessage() != null ? result.getErrorMessage() : "未知错误");
+                            sink.next("\n\n" + errorMsg + "\n");
+                            toolResults.put(toolName, errorMsg);
+                            hasFailure = true;
+                        }
+
+                    } catch (Exception e) {
+                        log.error("[SinglePass] 工具执行异常: toolName={}", toolName, e);
+                        String errorMsg = String.format("工具执行异常: %s", e.getMessage());
                         sink.next("\n\n" + errorMsg + "\n");
                         toolResults.put(toolName, errorMsg);
+                        hasFailure = true;
                     }
-
-                } catch (Exception e) {
-                    log.error("[SinglePass] 工具执行异常: toolName={}", toolName, e);
-                    String errorMsg = String.format("工具执行异常: %s", e.getMessage());
-                    sink.next("\n\n" + errorMsg + "\n");
-                    toolResults.put(toolName, errorMsg);
                 }
-            }
 
-            // 继续生成最终回答
-            continueAfterTools(originalMessages, toolResults, context, sink, state);
+                // 工具执行失败时，直接结束流程，不要让 LLM 继续编造
+                if (hasFailure) {
+                    sink.next("\n\n【系统提示】工具执行失败，请稍后重试或联系管理员。\n");
+                    sink.complete();
+                    return;
+                }
+
+                // 所有工具都成功执行，继续生成最终回答
+                continueAfterTools(originalMessages, toolResults, context, sink, state);
+
+            } finally {
+                // 清理异步线程的 SecurityContext
+                SecurityContextHolder.clearContext();
+            }
 
         }).exceptionally(e -> {
             log.error("[SinglePass] 工具执行异步异常", e);
@@ -611,8 +657,9 @@ public class SinglePassExecutor {
         // 转换为 DashScope 格式
         List<com.alibaba.dashscope.common.Message> dashMessages = convertToDashScopeMessages(newMessages);
 
-        // 不传工具，避免循环调用
-        sink.next("\n\n🤖 基于工具结果生成回答...\n");
+        // 关键修复：第二轮 LLM 调用使用新的 state，不复用第一轮的 state
+        // 每一轮 LLM 调用都是独立的思考过程，应该有独立的状态标记
+        final boolean[] newState = new boolean[]{false, false}; // [0]=思考已开始, [1]=思考已结束
 
         nativeService.deepThinkStream(WORKER_MODEL, dashMessages, List.of(), new StreamCallback() {
             @Override
@@ -620,9 +667,9 @@ public class SinglePassExecutor {
                 // DashScope API 已将 reasoningContent 和 content 分离
                 // 直接信任 API 的分离结果，不做额外过滤
                 if (reasoning != null && !reasoning.isEmpty()) {
-                    if (!state[0]) {
+                    if (!newState[0]) {
                         sink.next("@@THINK_START@@");
-                        state[0] = true;
+                        newState[0] = true;
                     }
                     sink.next(reasoning);
                 }
@@ -633,9 +680,10 @@ public class SinglePassExecutor {
                 // DashScope API 已将 reasoningContent 和 content 分离
                 // 直接信任 API 的分离结果，不做额外过滤
                 if (content != null && !content.isEmpty()) {
-                    if (state[0] && !state[1]) {
+                    // 正式内容：先结束思考区域（如果还未结束）
+                    if (newState[0] && !newState[1]) {
                         sink.next("@@THINK_END@@");
-                        state[1] = true;
+                        newState[1] = true;
                     }
                     sink.next(content);
                 }
@@ -648,7 +696,8 @@ public class SinglePassExecutor {
 
             @Override
             public void onComplete() {
-                if (state[0] && !state[1]) {
+                // 确保结束标记已发送
+                if (newState[0] && !newState[1]) {
                     sink.next("@@THINK_END@@");
                 }
                 sink.complete();
