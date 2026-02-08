@@ -187,17 +187,8 @@ public class SinglePassExecutor {
                 // ==================== 4. LLM 生成 (流式) ====================
                 doStreamChat(messages, context)
                         .doOnNext(chunk -> {
-                            // 处理思考过程标记
-                            if (chunk.contains("@@THINK_START@@")) {
-                                sink.next(chunk.replace("@@THINK_START@@", ""));
-                                return;
-                            }
-                            if (chunk.contains("@@THINK_END@@")) {
-                                sink.next(chunk.replace("@@THINK_END@@", ""));
-                                return;
-                            }
-
-                            // 收集内容
+                            // 直接透传所有内容，包括 @@THINK_START@@ 和 @@THINK_END@@ 标签
+                            // Controller 会根据这些标签来区分思考内容和正文
                             if (!chunk.isEmpty()) {
                                 fullAnswer.append(chunk);
                                 sink.next(chunk);
@@ -450,22 +441,27 @@ public class SinglePassExecutor {
             nativeService.deepThinkStream(WORKER_MODEL, dashMessages, tools, new StreamCallback() {
                 @Override
                 public void onReasoning(String reasoning) {
-                    if (!state[0]) {
-                        sink.next("@@THINK_START@@");
-                        state[0] = true;
-                    }
+                    // DashScope API 已将 reasoningContent 和 content 分离
+                    // 直接信任 API 的分离结果，不做额外过滤
                     if (reasoning != null && !reasoning.isEmpty()) {
+                        if (!state[0]) {
+                            sink.next("@@THINK_START@@");
+                            state[0] = true;
+                        }
                         sink.next(reasoning);
                     }
                 }
 
                 @Override
                 public void onContent(String content) {
-                    if (state[0] && !state[1]) {
-                        sink.next("@@THINK_END@@");
-                        state[1] = true;
-                    }
+                    // DashScope API 已将 reasoningContent 和 content 分离
+                    // 直接信任 API 的分离结果，不做额外过滤
                     if (content != null && !content.isEmpty()) {
+                        // 正式内容：先结束思考区域（如果还未结束）
+                        if (state[0] && !state[1]) {
+                            sink.next("@@THINK_END@@");
+                            state[1] = true;
+                        }
                         sink.next(content);
                     }
                 }
@@ -621,22 +617,26 @@ public class SinglePassExecutor {
         nativeService.deepThinkStream(WORKER_MODEL, dashMessages, List.of(), new StreamCallback() {
             @Override
             public void onReasoning(String reasoning) {
-                if (!state[0]) {
-                    sink.next("@@THINK_START@@");
-                    state[0] = true;
-                }
+                // DashScope API 已将 reasoningContent 和 content 分离
+                // 直接信任 API 的分离结果，不做额外过滤
                 if (reasoning != null && !reasoning.isEmpty()) {
+                    if (!state[0]) {
+                        sink.next("@@THINK_START@@");
+                        state[0] = true;
+                    }
                     sink.next(reasoning);
                 }
             }
 
             @Override
             public void onContent(String content) {
-                if (state[0] && !state[1]) {
-                    sink.next("@@THINK_END@@");
-                    state[1] = true;
-                }
+                // DashScope API 已将 reasoningContent 和 content 分离
+                // 直接信任 API 的分离结果，不做额外过滤
                 if (content != null && !content.isEmpty()) {
+                    if (state[0] && !state[1]) {
+                        sink.next("@@THINK_END@@");
+                        state[1] = true;
+                    }
                     sink.next(content);
                 }
             }
