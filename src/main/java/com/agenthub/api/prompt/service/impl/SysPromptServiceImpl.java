@@ -31,6 +31,7 @@ import freemarker.template.Template;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
+import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -118,42 +119,8 @@ public class SysPromptServiceImpl extends ServiceImpl<SysPromptMapper, SysPrompt
 
     /**
      * 渲染提示词模板
-     *
-     * <p>核心功能：从数据库获取提示词模板，将变量注入其中，生成最终的提示词文本。
-     *
-     * <h3>执行流程：</h3>
-     * <pre>
-     * ┌─────────────────────────────────────────────────────────────────┐
-     * │ Step 1: 从数据库获取模板                                         │
-     * │ getByCode(promptCode) → SysPrompt 实体                          │
-     * │         ↓                                                       │
-     * │ 包含: content (JSON格式，含 template 字段)                      │
-     * │       templateType (FREEMARKER / TEXT)                          │
-     * └─────────────────────────────────────────────────────────────────┘
-     *                           ↓
-     * ┌─────────────────────────────────────────────────────────────────┐
-     * │ Step 2: 提取模板内容                                             │
-     * │ extractTemplate() → 从 JSON 的 "template" 字段提取字符串        │
-     * └─────────────────────────────────────────────────────────────────┘
-     *                           ↓
-     * ┌─────────────────────────────────────────────────────────────────┐
-     * │ Step 3: 根据模板类型渲染                                         │
-     * │ ┌──────────────────┬─────────────────────────────────────────┐  │
-     * │ │ FREEMARKER 类型  │ TEXT 类型                               │  │
-     * │ ├──────────────────┼─────────────────────────────────────────┤  │
-     * │ │ 使用 Freemarker  │ 直接返回原内容                          │  │
-     * │ │ 引擎解析变量     │ (不做任何处理)                          │  │
-     * │ │                  │                                         │  │
-     * │ │ ${name} → "张三" │ ${name} → "${name}"                     │  │
-     * │ └──────────────────┴─────────────────────────────────────────┘  │
-     * └─────────────────────────────────────────────────────────────────┘
-     *                           ↓
-     * ┌─────────────────────────────────────────────────────────────────┐
-     * │ Step 4: 缓存结果（Spring Cache）                                │
-     * │ @Cacheable: 相同的 promptCode + variables 会直接返回缓存结果    │
-     * │ key: "SYSTEM_RAG_v1.0_12345678" (promptCode + variables哈希)   │
-     * └─────────────────────────────────────────────────────────────────┘
-     * </pre>
+     * <p>结果缓存于 Redis，key 格式: prompt::render::{promptCode}
+     * <p>注意：对于 TEXT 类型的模板，variables 参数不会被使用，因此可以安全缓存
      *
      * @param promptCode 提示词代码（如 "SYSTEM_RAG_v1.0"）
      * @param variables 模板变量（如 {"userName": "张三", "tools": [...]}）
@@ -162,7 +129,7 @@ public class SysPromptServiceImpl extends ServiceImpl<SysPromptMapper, SysPrompt
      * @throws RuntimeException 渲染失败
      */
     @Override
-//    @Cacheable(value = "sys_prompt_render", key = "#promptCode + '_' + #variables.hashCode()", unless = "#result == null")
+    @Cacheable(value = "prompt", key = "'render::' + #promptCode")
     public String render(String promptCode, Map<String, Object> variables) {
         // Step 1: 从数据库获取提示词配置
         SysPrompt prompt = this.getByCode(promptCode);
@@ -323,6 +290,7 @@ public class SysPromptServiceImpl extends ServiceImpl<SysPromptMapper, SysPrompt
 
     @Override
     @Transactional(rollbackFor = Exception.class)
+    @CacheEvict(value = "prompt", allEntries = true)
     public Boolean update(PromptUpdateRequest request) {
         SysPrompt prompt = this.getById(request.getId());
         if (prompt == null || prompt.getDelFlag() == 1) {
@@ -381,6 +349,7 @@ public class SysPromptServiceImpl extends ServiceImpl<SysPromptMapper, SysPrompt
     }
 
     @Override
+    @CacheEvict(value = "prompt", allEntries = true)
     public Boolean delete(Long id) {
         SysPrompt prompt = this.getById(id);
         if (prompt == null) {
@@ -401,6 +370,7 @@ public class SysPromptServiceImpl extends ServiceImpl<SysPromptMapper, SysPrompt
     }
 
     @Override
+    @CacheEvict(value = "prompt", allEntries = true)
     public Boolean toggleActive(Long id, Boolean isActive) {
         SysPrompt prompt = new SysPrompt();
         prompt.setId(id);
@@ -409,6 +379,7 @@ public class SysPromptServiceImpl extends ServiceImpl<SysPromptMapper, SysPrompt
     }
 
     @Override
+    @CacheEvict(value = "prompt", allEntries = true)
     public Boolean toggleLocked(Long id, Boolean isLocked) {
         SysPrompt prompt = new SysPrompt();
         prompt.setId(id);
@@ -500,6 +471,7 @@ public class SysPromptServiceImpl extends ServiceImpl<SysPromptMapper, SysPrompt
 
     @Override
     @Transactional(rollbackFor = Exception.class)
+    @CacheEvict(value = "prompt", allEntries = true)
     public Boolean rollbackToVersion(Long promptId, Long versionId) {
         SysPrompt prompt = this.getById(promptId);
         if (prompt == null) {
