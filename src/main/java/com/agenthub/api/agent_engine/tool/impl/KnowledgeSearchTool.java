@@ -7,6 +7,7 @@ import com.agenthub.api.agent_engine.model.ToolExecutionResult;
 import com.agenthub.api.agent_engine.tool.AgentTool;
 import com.agenthub.api.ai.domain.knowledge.PowerKnowledgeQuery;
 import com.agenthub.api.ai.domain.knowledge.PowerKnowledgeResult;
+import com.agenthub.api.ai.domain.knowledge.EvidenceBlock;
 import com.agenthub.api.ai.service.PowerKnowledgeService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -14,6 +15,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
+import java.util.List;
 
 @Slf4j
 @Component
@@ -49,7 +51,7 @@ public class KnowledgeSearchTool implements AgentTool {
                             "required": ["query"]
                         }
                         """)
-                .requiresConfirmation(false) // 查知识库是安全的，不需要确认
+                .requiresConfirmation(false)
                 .costWeight(1)
                 .build();
     }
@@ -68,8 +70,7 @@ public class KnowledgeSearchTool implements AgentTool {
 
             log.info("[AgentTool] Invoking knowledge_search: query={}, year={}, category={}", query, year, category);
 
-            // 构造 V1 的查询对象
-            // 注意：V1 的 PowerKnowledgeQuery可能有默认值，这里显式透传
+            // 构造查询对象
             PowerKnowledgeQuery serviceQuery = new PowerKnowledgeQuery(
                     query,
                     5, // 默认查 Top 5
@@ -77,21 +78,96 @@ public class KnowledgeSearchTool implements AgentTool {
                     category
             );
 
-            // 调用旧 Service
+            // 调用服务（v2.0 返回 EvidenceBlock）
             PowerKnowledgeResult result = powerKnowledgeService.retrieve(serviceQuery);
 
-            // 序列化结果供 LLM 阅读
-            // PowerKnowledgeResult 包含 answer(RAG生成的答案) 和 rawContentSnippets(片段)
-            // 我们主要把片段给 V2 Agent，让 V2 Agent 自己组织语言回答，或者直接用 V1 生成好的 answer
-            // 策略：为了让 V2 Agent 更智能，我们把引用片段（snippets）喂给它，让它来"自省"生成。
-            
-            String outputJson = objectMapper.writeValueAsString(result);
-            
-            return ToolExecutionResult.success(outputJson, result);
+            // 格式化输出：优先使用 EvidenceBlock，向后兼容
+            String formattedOutput = formatResult(result);
+
+            log.info("[AgentTool] knowledge_search 完成: evidenceBlocks={}, snippets={}",
+                    result.getEvidenceBlockCount(), result.rawContentSnippets().size());
+
+            return ToolExecutionResult.success(formattedOutput, result);
 
         } catch (Exception e) {
             log.error("KnowledgeSearchTool execution failed", e);
             return ToolExecutionResult.failure("知识库查询失败: " + e.getMessage());
         }
+    }
+
+    /**
+     * 格式化检索结果（v2.0：使用 EvidenceBlock）
+     * <p>原则：不摘要、不压缩、不改写原文，保留完整证据链</p>
+     */
+    private String formatResult(PowerKnowledgeResult result) {
+        StringBuilder sb = new StringBuilder();
+
+        // 优先使用 EvidenceBlock
+        List<EvidenceBlock> blocks = result.evidenceBlocks();
+        if (blocks != null && !blocks.isEmpty()) {
+            sb.append("【知识库检索结果】共找到 ").append(blocks.size())
+              .append(" 个证据块（").append(result.rawContentSnippets().size()).append(" 个文档片段）\n\n");
+
+            for (int i = 0; i < blocks.size(); i++) {
+                EvidenceBlock block = blocks.get(i);
+                sb.append(formatEvidenceBlock(block, i + 1));
+            }
+        } else {
+            // 降级：使用 rawContentSnippets
+            sb.append("【知识库检索结果】共找到 ")
+              .append(result.rawContentSnippets().size()).append(" 条相关内容\n\n");
+
+            for (int i = 0; i < result.rawContentSnippets().size(); i++) {
+                sb.append("[片段 ").append(i + 1).append("] ");
+                sb.append(result.rawContentSnippets().get(i));
+                sb.append("\n\n---\n\n");
+            }
+        }
+
+        // 添加来源文件列表
+        if (result.sources() != null && !result.sources().isEmpty()) {
+            sb.append("【来源文件】\n");
+            for (PowerKnowledgeResult.SourceDocument source : result.sources()) {
+                sb.append(String.format("- %s\n", source.filename()));
+            }
+        }
+
+        return sb.toString();
+    }
+
+    /**
+     * 格式化单个 EvidenceBlock
+     */
+    private String formatEvidenceBlock(EvidenceBlock block, int index) {
+        StringBuilder sb = new StringBuilder();
+
+        // 标题行：证据编号 + 来源引用
+        sb.append("┌────────────────────────────────────────\n");
+        sb.append(String.format("| [证据 %d] %s\n", index, block.getSourceReference()));
+        sb.append("├────────────────────────────────────────\n");
+
+        // 元信息行
+        sb.append("| ");
+        if (block.chunkCount() > 1) {
+            sb.append("合并 ").append(block.chunkCount()).append(" 个片段 | ");
+        }
+        sb.append("支持度: ").append(String.format("%.2f", block.supportScore()));
+        if (block.type() != null) {
+            sb.append(" | 类型: ").append(block.type().name());
+        }
+        sb.append("\n");
+        sb.append("├────────────────────────────────────────\n");
+
+        // 内容（原文，不改写）
+        String content = block.content();
+        // 为了让 LLM 更好地解析，每行加上 "| " 前缀
+        sb.append("| \n");
+        for (String line : content.split("\n")) {
+            sb.append("| ").append(line).append("\n");
+        }
+        sb.append("|\n");
+        sb.append("└────────────────────────────────────────\n\n");
+
+        return sb.toString();
     }
 }

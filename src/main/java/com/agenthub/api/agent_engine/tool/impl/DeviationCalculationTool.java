@@ -28,7 +28,7 @@ public class DeviationCalculationTool implements AgentTool {
     public AgentToolDefinition getDefinition() {
         return AgentToolDefinition.builder()
                 .name("calculate_deviation")
-                .description("计算偏差考核费用和免责情况。当用户询问“考核多少钱”、“免责了吗”或提供“计划xxx实际xxx”的数据时使用。")
+                .description("计算偏差考核费用和免责情况。当用户询问「考核多少钱」、「免责了吗」或提供「计划xxx实际xxx」的数据时使用。")
                 .parameterSchema("""
                         {
                             "type": "object",

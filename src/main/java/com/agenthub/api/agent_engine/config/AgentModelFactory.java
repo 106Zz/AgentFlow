@@ -36,6 +36,10 @@ public class AgentModelFactory {
     public static final String READER_MODEL = "kimi-k2-thinking";
     public static final double READER_TEMPERATURE = 0.2;
 
+    /** Intent 意图识别模型配置 */
+    public static final String INTENT_MODEL = "qwen-plus";
+    public static final double INTENT_TEMPERATURE = 0.1;
+
     /**
      * 1. Worker (打工人): 负责日常对话、工具调用
      * <p>模型: deepseek-v3.2 (响应快，成本低)</p>
@@ -79,6 +83,22 @@ public class AgentModelFactory {
                 .defaultOptions(DashScopeChatOptions.builder()
                         .withModel("kimi-k2-thinking")
                         .withTemperature(0.2)
+                        .build())
+                .build();
+    }
+
+    /**
+     * 4. Intent (意图识别): 负责用户意图分类
+     * <p>模型: qwen-plus (响应快，分类准确)</p>
+     * <p>特点: 低温度设置，确保分类结果稳定一致</p>
+     */
+    @Bean("intentChatClient")
+    public ChatClient intentChatClient(ChatClient.Builder builder) {
+        return builder
+                .defaultSystem("你是一个意图分类助手。负责判断用户问题是闲聊(CHAT)还是需要查询知识库(KB_QA)。")
+                .defaultOptions(DashScopeChatOptions.builder()
+                        .withModel("qwen-plus")
+                        .withTemperature(0.1)
                         .build())
                 .build();
     }

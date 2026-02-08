@@ -1,6 +1,7 @@
 package com.agenthub.api.ai.service;
 
 import com.agenthub.api.ai.config.DashScopeRerankerConfig;
+import com.agenthub.api.ai.domain.knowledge.EvidenceBlock;
 import com.agenthub.api.ai.domain.knowledge.PowerKnowledgeQuery;
 import com.agenthub.api.ai.domain.knowledge.PowerKnowledgeResult;
 import com.agenthub.api.ai.utils.VectorStoreHelper;
@@ -31,6 +32,7 @@ public class PowerKnowledgeService {
         private final DashScopeRerankerConfig dashScopeReranker;
         private final IHybridSearchService hybridSearchService;
         private final OSS ossClient;
+        private final EvidenceAssembly evidenceAssembly;  // 新增：证据组装器
 
         @Value("${aliyun.oss.bucketName:agenthub-knowledge}")
         private String bucketName;
@@ -169,7 +171,7 @@ public class PowerKnowledgeService {
 
 
         /**
-         * 组装返回结果（包含 OSS 签名链接）
+         * 组装返回结果（v2.0：包含 EvidenceBlock）
          */
         private PowerKnowledgeResult buildResult(
                 List<Document> documents,
@@ -180,7 +182,13 @@ public class PowerKnowledgeService {
                         return emptyResult();
                 }
 
-                // A. 提取原始切片内容 (rawContentSnippets)
+                // ========== v2.0 新增：证据组装 ==========
+                // 将 rerank 后的 chunks 组装成语义完整的 EvidenceBlock
+                List<EvidenceBlock> evidenceBlocks = evidenceAssembly.assemble(documents);
+                log.info("[PowerKnowledgeService] 证据组装完成：{} chunks -> {} evidence blocks",
+                        documents.size(), evidenceBlocks.size());
+
+                // A. 提取原始切片内容 (rawContentSnippets) - 向后兼容
                 List<String> snippets = documents.stream()
                         .map(Document::getText)
                         .collect(Collectors.toList());
@@ -210,19 +218,20 @@ public class PowerKnowledgeService {
                         .orElse(0.0);
 
                 // D. 生成简报给大模型看
-                // 注意：Tool 的 answer 不是最终给用户的回复，而是告诉大模型"我查到了什么"
+                // 注意：answer 不是最终给用户的回复，而是告诉大模型"我查到了什么"
                 String sourceNamesStr = sources.stream()
                         .map(PowerKnowledgeResult.SourceDocument::filename)
                         .collect(Collectors.joining(", "));
 
                 String answerSummary = String.format(
-                        "检索成功。共找到 %d 条相关文档片段，最高置信度 %.2f。来源包括：%s",
-                        documents.size(), maxScore, sourceNamesStr
+                        "检索成功。共找到 %d 条相关文档片段，组装成 %d 个证据块，最高支持度 %.2f。来源包括：%s",
+                        documents.size(), evidenceBlocks.size(), maxScore, sourceNamesStr
                 );
 
-                log.info("⚡️ [RAG] 检索完成。耗时: {}ms, 最终: {} 条", elapsedMs, documents.size());
+                log.info("⚡️ [RAG] 检索完成。耗时: {}ms, 最终: {} 条, 证据块: {} 个",
+                        elapsedMs, documents.size(), evidenceBlocks.size());
 
-                // 返回完整的 Result（包含下载链接）
+                // E. 返回 v2.0 格式的结果（包含 evidenceBlocks）
                 return new PowerKnowledgeResult(
                         answerSummary,              // answer: 给大模型的摘要
                         snippets,                   // rawContentSnippets: 原始切片
@@ -230,7 +239,8 @@ public class PowerKnowledgeService {
                         Map.of(                     // debugInfo: 调试信息
                                 "total_time_ms", elapsedMs,
                                 "top_score", maxScore
-                        )
+                        ),
+                        evidenceBlocks              // v2.0 新增：证据块列表
                 );
         }
 
@@ -242,7 +252,8 @@ public class PowerKnowledgeService {
                         "未在知识库中找到相关内容。",
                         List.of(),
                         List.of(),
-                        Map.of()
+                        Map.of(),
+                        List.of()  // evidenceBlocks 为空
                 );
         }
 

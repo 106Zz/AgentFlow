@@ -22,6 +22,12 @@ public interface StreamCallback {
     void onContent(String chunk);
 
     /**
+     * 工具调用回调
+     * <p>当模型决定调用工具时触发</p>
+     */
+    default void onToolCall(java.util.List<com.agenthub.api.agent_engine.model.ToolCall> toolCalls) {}
+
+    /**
      * 完成回调
      * <p>流式输出结束时调用</p>
      */
