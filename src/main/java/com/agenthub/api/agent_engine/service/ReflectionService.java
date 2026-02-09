@@ -1,13 +1,19 @@
 package com.agenthub.api.agent_engine.service;
 
 import com.agenthub.api.agent_engine.model.EvaluationResult;
+import com.agenthub.api.agent_engine.tool.judge.ConsistencyJudgeFunctionTool;
 import com.agenthub.api.prompt.service.ISysPromptService;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
+
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -49,15 +55,118 @@ public class ReflectionService {
 
     private final ChatClient judgeClient;
     private final ISysPromptService sysPromptService;
-
-    private static final String JUDGE_PROMPT_CODE = "SYSTEM-JUDGE-v1.0";
+    private final ObjectMapper objectMapper;
+    private final ConsistencyJudgeFunctionTool consistencyJudgeFunctionTool;
+    private static final String CONSISTENCY_JUDGE_PROMPT_CODE = "SYSTEM-JUDGE-v1.0";
     private static final Pattern PASS_PATTERN = Pattern.compile("PASS", Pattern.CASE_INSENSITIVE);
     private static final Pattern FAIL_PATTERN = Pattern.compile("FAIL::?(.+?)(?=\\n|$)", Pattern.CASE_INSENSITIVE);
 
     public ReflectionService(@Qualifier("judgeChatClient") ChatClient judgeClient,
-                             ISysPromptService sysPromptService) {
+                             ISysPromptService sysPromptService,
+                             ConsistencyJudgeFunctionTool consistencyJudgeFunctionTool,
+                             ObjectMapper objectMapper) {
         this.judgeClient = judgeClient;
         this.sysPromptService = sysPromptService;
+        this.consistencyJudgeFunctionTool = consistencyJudgeFunctionTool;
+        this.objectMapper = objectMapper;
+    }
+
+    /**
+     * 从工具调用记录中提取证据
+     * <p>从 tool_calls[].result() 中的 evidenceBlocks 提取证据内容</p>
+     *
+     * @param toolCallsVars tool_calls 变量（List&lt;Map&lt;String, Object&gt;&gt;）
+     * @return 证据列表
+     */
+    private List<String> extractEvidenceFromToolCalls(Object toolCallsVars) {
+        List<String> evidence = new ArrayList<>();
+
+        if (toolCallsVars == null) {
+            return evidence;
+        }
+
+        try {
+            if (toolCallsVars instanceof List) {
+                List<?> toolCalls = (List<?>) toolCallsVars;
+                for (Object tcObj : toolCalls) {
+                    if (tcObj instanceof Map) {
+                        Map<?, ?> tcMap = (Map<?, ?>) tcObj;
+                        if (tcMap.containsKey("result")) {
+                            String resultContent = tcMap.get("result").toString();
+
+                            // 检查是否为 JSON 格式（以 { 或 [ 开头）
+                            String trimmed = resultContent.trim();
+                            if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+                                try {
+                                    JsonNode node = objectMapper.readTree(resultContent);
+                                    if (node.has("evidenceBlocks") && node.get("evidenceBlocks").isArray()) {
+                                        for (JsonNode block : node.get("evidenceBlocks")) {
+                                            if (block.has("content")) {
+                                                evidence.add(block.get("content").asText());
+                                            }
+                                        }
+                                    }
+                                } catch (Exception e) {
+                                    log.debug("[ReflectionService] 解析 JSON 失败，跳过此结果");
+                                }
+                            } else {
+                                // 非 JSON 格式（如 web_search 返回的纯文本），直接作为证据添加
+                                // 限制长度，避免证据过长
+                                if (resultContent.length() > 50) {
+                                    // 如果内容过长，截取前 2000 字符
+                                    String truncated = resultContent.length() > 2000
+                                            ? resultContent.substring(0, 2000) + "...(内容过长，已截断)"
+                                            : resultContent;
+                                    evidence.add(truncated);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[ReflectionService] 提取 tool_calls 证据失败", e);
+        }
+
+        log.info("[ReflectionService] 从 tool_calls 提取证据: 数量={}", evidence.size());
+        return evidence;
+    }
+
+    /**
+     * 从 RAG 上下文中提取证据
+     * <p>优先从 tool_calls 提取，降级从 pre_retrieved_content 提取</p>
+     *
+     * @param ragContext RAG 上下文
+     * @return 证据列表
+     */
+    private List<String> extractEvidenceFromRagContext(Map<String, Object> ragContext) {
+        // 优先从 tool_calls 提取
+        if (ragContext.containsKey("tool_calls")) {
+            List<String> evidence = extractEvidenceFromToolCalls(ragContext.get("tool_calls"));
+            if (!evidence.isEmpty()) {
+                return evidence;
+            }
+        }
+
+        // 降级：从 pre_retrieved_content 提取
+        List<String> evidence = new ArrayList<>();
+        if (ragContext.containsKey("pre_retrieved_content")) {
+            Object preRetrieved = ragContext.get("pre_retrieved_content");
+            if (preRetrieved != null) {
+                String content = preRetrieved.toString();
+                if (!content.isBlank()) {
+                    String[] lines = content.split("\n");
+                    for (String line : lines) {
+                        line = line.trim();
+                        if (!line.isEmpty() && !line.startsWith("---") && !line.startsWith("【")) {
+                            evidence.add(line);
+                        }
+                    }
+                }
+            }
+        }
+
+        return evidence;
     }
 
     /**
@@ -89,32 +198,50 @@ public class ReflectionService {
                     vars.containsKey("tool_calls"),
                     vars.containsKey("conversation_history"));
 
-            // 2. 渲染 System Prompt
-            String systemPrompt = sysPromptService.render(JUDGE_PROMPT_CODE, vars);
+            // 2. 渲染 System Prompt（使用数据库中的内容一致性审计提示词）
+            String systemPrompt = sysPromptService.render(CONSISTENCY_JUDGE_PROMPT_CODE, vars);
             if (systemPrompt == null || systemPrompt.isEmpty()) {
-                log.warn("[Judge] Prompt rendered empty, using fallback.");
+                log.warn("[Judge] CONSISTENCY 提示词未找到，使用 fallback");
                 systemPrompt = buildFallbackPrompt(vars);
             }
 
             log.debug("[Judge] System Prompt 长度: {}", systemPrompt.length());
 
-            // 3. 调用 Judge 模型
+            // 3. 提取证据
+            List<String> evidenceList = extractEvidenceFromRagContext(vars);
+            String evidenceJson;
+            try {
+                evidenceJson = objectMapper.writeValueAsString(evidenceList);
+            } catch (Exception e) {
+                log.warn("[ReflectionService] 序列化证据失败，使用空数组", e);
+                evidenceJson = "[]";
+            }
+
+            log.info("[Judge] 证据提取完成: 数量={}", evidenceList.size());
+
+            // 4. 调用 LLM Judge + .tools()
+            String userMessage = String.format(
+                "【用户问题】\n%s\n\n【Agent 回答】\n%s\n\n【提供的证据】\n%s",
+                query, answer, evidenceJson
+            );
+
+            // 5. 调用 LLM Judge
             String result = judgeClient.prompt()
                     .system(systemPrompt)
-                    .user("请开始审计，按以下格式输出：\nPASS（如果回答合格）\nFAIL: 原因（如果不合格，简要说明原因）")
+                    .user(userMessage)
+                    .tools(consistencyJudgeFunctionTool)
                     .call()
                     .content();
 
             log.info("[Judge] Judge 模型返回: {}", result);
 
-            // 4. 解析结果
+            // 5. 解析结果
             EvaluationResult parsed = parseResult(result);
             log.info("[Judge] 解析结果: passed={}, reason='{}'", parsed.isPassed(), parsed.getReason());
             return parsed;
 
         } catch (Exception e) {
             log.error("[Judge] 评估失败", e);
-            // 降级策略：报错默认通过，避免阻塞用户
             return EvaluationResult.pass("Evaluation error: " + e.getMessage());
         }
     }

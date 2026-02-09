@@ -3,7 +3,6 @@ package com.agenthub.api.agent_engine.capability;
 import com.agenthub.api.agent_engine.model.AgentToolDefinition;
 import com.agenthub.api.agent_engine.tool.AgentTool;
 import com.agenthub.api.prompt.service.ISysPromptService;
-import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationListener;
@@ -32,7 +31,7 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class ToolRegistry implements ApplicationListener<ContextRefreshedEvent> {
 
-    private final List<AgentTool> allTools;
+    private final List<AgentTool> agentTools;
     private final ISysPromptService sysPromptService;
 
     /**
@@ -64,13 +63,15 @@ public class ToolRegistry implements ApplicationListener<ContextRefreshedEvent> 
      * <p>在应用启动时执行一次，构建所有工具的描述字符串和索引</p>
      */
     private void preloadToolCache() {
-        log.info("[ToolRegistry] 开始预构建工具缓存，当前工具数量: {}", allTools.size());
+        log.info("[ToolRegistry] 开始预构建工具缓存，当前AgentTool数量: {}", agentTools.size());
 
         // 按工具名称排序，保证每次启动生成的字符串顺序一致
         // 这对于 LLM 的 Prompt Cache 命中很重要
-        List<AgentTool> sortedTools = allTools.stream()
+        List<AgentTool> sortedTools = agentTools.stream()
                 .sorted(Comparator.comparing(t -> t.getDefinition().getName()))
                 .toList();
+
+        log.info("[ToolRegistry] AgentTool 数量: {}", sortedTools.size());
 
         Map<String, AgentTool> nameIndex = new HashMap<>();
         Map<String, String> descCache = new HashMap<>();
@@ -91,7 +92,7 @@ public class ToolRegistry implements ApplicationListener<ContextRefreshedEvent> 
         this.toolDescCache = Map.copyOf(descCache);
         this.cachedFullToolsDesc = fullDescBuilder.toString();
 
-        log.info("[ToolRegistry] 工具缓存构建完成");
+        log.info("[ToolRegistry] 工具缓存构建完成，工具总数: {}", sortedTools.size());
     }
 
     /**
@@ -188,11 +189,9 @@ public class ToolRegistry implements ApplicationListener<ContextRefreshedEvent> 
     }
 
     /**
-     * 获取工具列表 (支持过滤)
-     * <p>用于获取 AgentTool 业务对象列表</p>
+     * 获取所有工具列表
      *
-     * @param excludeToolNames 需要排除的工具名称集合
-     * @return 过滤后的 AgentTool 列表
+     * @return 所有 AgentTool 的列表
      */
     public List<AgentTool> getTools(Set<String> excludeToolNames) {
         return toolNameIndex.values().stream()
