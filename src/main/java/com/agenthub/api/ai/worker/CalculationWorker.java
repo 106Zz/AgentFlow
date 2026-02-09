@@ -29,12 +29,19 @@ import java.util.regex.Pattern;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class CalculationWorker {
 
     private final PowerKnowledgeService powerKnowledgeService;
     private final ComplianceSkills complianceSkills;
     private final Executor executor;
+
+    public CalculationWorker(PowerKnowledgeService powerKnowledgeService,
+                             ComplianceSkills complianceSkills,
+                             @Qualifier("agentWorkerExecutor") Executor executor) {
+        this.powerKnowledgeService = powerKnowledgeService;
+        this.complianceSkills = complianceSkills;
+        this.executor = executor;
+    }
 
     /**
      * 执行偏差考核审查流程
