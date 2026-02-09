@@ -32,6 +32,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.stream.Collectors;
 
+import static net.sf.jsqlparser.parser.feature.Feature.set;
+
 /**
  * 单次执行器
  * <p>实现 "意图识别 → 预检索 → LLM输出 → Judge事后审计" 的单次流程</p>
@@ -498,10 +500,11 @@ public class SinglePassExecutor {
                             context.getUserId() != null ? Long.parseLong(context.getUserId()) : null,
                             context.getSessionId())
                     .outputData(answer, System.currentTimeMillis() - startTime, null)
-                    .status(CaseStatus.COMPLETED)
+                     .status(CaseStatus.COMPLETED)
                     .durationMs((int) (System.currentTimeMillis() - startTime))
                     .toolCallRecords(context.getToolCallRecords())
-                    .aiJudgeResult(evalResult.isPassed(), evalResult.getReason(), null)
+                    .aiJudgeResult(evalResult.isPassed(), evalResult.getReason(), "SYSTEM-JUDGE-v1.0")
+                    .promptData("SYSTEM-JUDGE-v1.0")
                     .metadata("intent_confidence",
                             context.getIntentConfidence() != null ?
                                     String.valueOf(context.getIntentConfidence()) : "N/A")
@@ -626,7 +629,7 @@ public class SinglePassExecutor {
             tools = List.of();
             log.debug("[SinglePass] 预检索已完成，不传任何工具给 LLM");
         } else {
-            // 预检索未完成：按需传递工具
+            // 预检索未完成：传递所有工具
             tools = toolRegistry.getTools(Set.of());
             log.debug("[SinglePass] 调用 LLM，携带工具数量: {}", tools.size());
         }
