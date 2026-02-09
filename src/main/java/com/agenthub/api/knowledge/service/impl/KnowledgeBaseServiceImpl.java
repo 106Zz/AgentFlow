@@ -41,8 +41,15 @@ public class KnowledgeBaseServiceImpl extends ServiceImpl<KnowledgeBaseMapper, K
     @Override
     public PageResult<KnowledgeBase> selectKnowledgePage(KnowledgeBase knowledge, PageQuery pageQuery) {
         LambdaQueryWrapper<KnowledgeBase> wrapper = new LambdaQueryWrapper<>();
-        wrapper.like(StrUtil.isNotEmpty(knowledge.getTitle()), KnowledgeBase::getTitle, knowledge.getTitle())
-                .eq(StrUtil.isNotEmpty(knowledge.getCategory()), KnowledgeBase::getCategory, knowledge.getCategory())
+        
+        // 支持标题或文件名的模糊搜索
+        if (StrUtil.isNotEmpty(knowledge.getTitle())) {
+            wrapper.and(w -> w.like(KnowledgeBase::getTitle, knowledge.getTitle())
+                    .or()
+                    .like(KnowledgeBase::getFileName, knowledge.getTitle()));
+        }
+
+        wrapper.eq(StrUtil.isNotEmpty(knowledge.getCategory()), KnowledgeBase::getCategory, knowledge.getCategory())
                 .eq(StrUtil.isNotEmpty(knowledge.getStatus()), KnowledgeBase::getStatus, knowledge.getStatus())
                 .orderByDesc(KnowledgeBase::getCreateTime);
 
@@ -61,9 +68,15 @@ public class KnowledgeBaseServiceImpl extends ServiceImpl<KnowledgeBaseMapper, K
                 .eq(KnowledgeBase::getUserId, userId)
         );
 
+        // 支持标题或文件名的模糊搜索
+        if (StrUtil.isNotEmpty(knowledge.getTitle())) {
+            wrapper.and(w -> w.like(KnowledgeBase::getTitle, knowledge.getTitle())
+                    .or()
+                    .like(KnowledgeBase::getFileName, knowledge.getTitle()));
+        }
+
         // 其他查询条件
-        wrapper.like(StrUtil.isNotEmpty(knowledge.getTitle()), KnowledgeBase::getTitle, knowledge.getTitle())
-                .eq(StrUtil.isNotEmpty(knowledge.getCategory()), KnowledgeBase::getCategory, knowledge.getCategory())
+        wrapper.eq(StrUtil.isNotEmpty(knowledge.getCategory()), KnowledgeBase::getCategory, knowledge.getCategory())
                 .eq(StrUtil.isNotEmpty(knowledge.getStatus()), KnowledgeBase::getStatus, knowledge.getStatus())
                 .orderByDesc(KnowledgeBase::getCreateTime);
 
