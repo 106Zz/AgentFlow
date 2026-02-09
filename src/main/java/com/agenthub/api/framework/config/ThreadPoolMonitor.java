@@ -35,6 +35,18 @@ public class ThreadPoolMonitor {
     @Qualifier("agentWorkerExecutor")
     private ThreadPoolTaskExecutor agentWorkerExecutor;
 
+    @Autowired
+    @Qualifier("hybridSearchExecutor")
+    private ThreadPoolTaskExecutor hybridSearchExecutor;
+
+    @Autowired
+    @Qualifier("judgeExecutor")
+    private ThreadPoolTaskExecutor judgeExecutor;
+
+    @Autowired
+    @Qualifier("sseExecutor")
+    private ThreadPoolTaskExecutor sseExecutor;
+
     /**
      * 每5分钟输出一次线程池状态
      */
@@ -44,6 +56,9 @@ public class ThreadPoolMonitor {
         logThreadPoolStatus("向量化线程池", vectorizeExecutor);
         logThreadPoolStatus("通用任务线程池", taskExecutor);
         logThreadPoolStatus("Agent工作线程池", agentWorkerExecutor);
+        logThreadPoolStatus("混合检索线程池", hybridSearchExecutor);
+        logThreadPoolStatus("Judge审计线程池", judgeExecutor);
+        logThreadPoolStatus("SSE流式线程池", sseExecutor);
     }
 
     private void logThreadPoolStatus(String poolName, ThreadPoolTaskExecutor executor) {

@@ -33,7 +33,6 @@ mybatis-plus:
   type-handlers-package: com.agenthub.api.common.handler
   configuration:
     map-underscore-to-camel-case: true
-    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
   global-config:
     db-config:
       logic-delete-field: delFlag
@@ -81,6 +80,10 @@ logging:
   level:
     com.agenthub: debug
     org.springframework.security: debug
+    # MyBatis SQL 日志关闭（只在需要时开启）
+    com.agenthub.api.*.mapper: warn
+    com.baomidou.mybatisplus: warn
+    org.apache.ibatis: warn
 
 knowledge:
   retrieval:

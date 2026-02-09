@@ -19,6 +19,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
@@ -48,6 +49,7 @@ public class HybridSearchServiceImpl implements IHybridSearchService {
     private final VectorStore vectorStore;
     private final IBm25SearchService bm25SearchService;
     private final RRFFusion rrfFusion;
+    private final Executor hybridSearchExecutor;  // 由 Spring 按名称注入
 
     /**
      * 混合检索入口
@@ -58,9 +60,7 @@ public class HybridSearchServiceImpl implements IHybridSearchService {
     @Override
     public List<HybridSearchResult> hybridSearch(HybridSearchRequest request) {
         long startTime = System.currentTimeMillis();
-
-        log.debug("【混合检索】查询: '{}', 策略: {}",
-                request.getQuery(), request.getFusionStrategy());
+        log.info("【混合检索】开始: query='{}', strategy={}", request.getQuery(), request.getFusionStrategy());
 
         // 根据策略选择融合方式
         List<HybridSearchResult> results = switch (request.getFusionStrategy()) {
@@ -69,7 +69,7 @@ public class HybridSearchServiceImpl implements IHybridSearchService {
         };
 
         long elapsed = System.currentTimeMillis() - startTime;
-        log.info("【混合检索】查询: '{}', 返回: {}, 耗时: {}ms",
+        log.info("【混合检索】完成: query='{}', returned={}, elapsed={}ms",
                 request.getQuery(), results.size(), elapsed);
 
         return results;
@@ -101,7 +101,7 @@ public class HybridSearchServiceImpl implements IHybridSearchService {
     private List<HybridSearchResult> rrfFusion(HybridSearchRequest request) {
         long startTime = System.currentTimeMillis();
 
-        // 并行执行两种检索
+        // 并行执行两种检索（使用混合检索专用线程池）
         CompletableFuture<List<Document>> vectorFuture = CompletableFuture.supplyAsync(() -> {
             try {
                 return doVectorSearch(request);
@@ -109,7 +109,7 @@ public class HybridSearchServiceImpl implements IHybridSearchService {
                 log.warn("【混合检索】向量检索失败: {}", request.getQuery(), e);
                 return Collections.emptyList();
             }
-        });
+        }, hybridSearchExecutor);
 
         // 方法2：BM25检索 - 调用已实现的异步方法
         CompletableFuture<List<Bm25SearchResult>> bm25Future = bm25SearchService.searchAsync(
@@ -125,9 +125,6 @@ public class HybridSearchServiceImpl implements IHybridSearchService {
             List<Document> vectorResults = vectorFuture.get();
             List<Bm25SearchResult> bm25Results = bm25Future.get();
 
-            log.debug("【混合检索】向量结果: {}, BM25结果: {}",
-                    vectorResults.size(), bm25Results.size());
-
             // RRF 融合（原有逻辑）
             int k = request.getRrfK() != null ? request.getRrfK() : 60;
             List<HybridSearchResult> fused = rrfFusion.fuse(
@@ -141,16 +138,16 @@ public class HybridSearchServiceImpl implements IHybridSearchService {
             fillMissingContent(fused, vectorResults, bm25Results);
 
             long elapsed = System.currentTimeMillis() - startTime;
-            log.info("【混合检索-并行】查询: '{}', 返回: {}, 耗时: {}ms",
+            log.info("【混合检索-RRF】完成: query='{}', returned={}, elapsed={}ms",
                     request.getQuery(), fused.size(), elapsed);
 
             return fused;
 
         } catch (TimeoutException e) {
-            log.error("【混合检索】超时: {}", request.getQuery());
+            log.error("【混合检索-RRF】超时: {}", request.getQuery());
             return Collections.emptyList();
         } catch (Exception e) {
-            log.error("【混合检索】并行执行异常", e);
+            log.error("【混合检索-RRF】执行异常", e);
             throw new RuntimeException("混合检索失败", e);
         }
     }
@@ -166,7 +163,7 @@ public class HybridSearchServiceImpl implements IHybridSearchService {
         long startTime = System.currentTimeMillis();
 
 
-        // 并行执行两种检索
+        // 并行执行两种检索（使用混合检索专用线程池）
         CompletableFuture<List<Document>> vectorFuture = CompletableFuture.supplyAsync(() -> {
             try {
                 return doVectorSearch(request);
@@ -174,7 +171,7 @@ public class HybridSearchServiceImpl implements IHybridSearchService {
                 log.warn("【混合检索】向量检索失败: {}", request.getQuery(), e);
                 return Collections.emptyList();
             }
-        });
+        }, hybridSearchExecutor);
 
         CompletableFuture<List<Bm25SearchResult>> bm25Future = bm25SearchService.searchAsync(
                 convertToBm25Request(request)
@@ -241,16 +238,16 @@ public class HybridSearchServiceImpl implements IHybridSearchService {
                     .collect(Collectors.toList());
 
             long elapsed = System.currentTimeMillis() - startTime;
-            log.info("【混合检索-加权并行】查询: '{}', 返回: {}, 耗时: {}ms",
+            log.info("【混合检索-Weighted】完成: query='{}', returned={}, elapsed={}ms",
                     request.getQuery(), results.size(), elapsed);
 
             return results;
 
         } catch (TimeoutException e) {
-            log.error("【混合检索】超时: {}", request.getQuery());
+            log.error("【混合检索-Weighted】超时: {}", request.getQuery());
             return Collections.emptyList();
         } catch (Exception e) {
-            log.error("【混合检索】并行执行异常", e);
+            log.error("【混合检索-Weighted】执行异常", e);
             throw new RuntimeException("混合检索失败", e);
         }
     }
@@ -284,14 +281,14 @@ public class HybridSearchServiceImpl implements IHybridSearchService {
             if (!filter.isEmpty()) {
                 filter.append(" && ");
             }
-            
+
             // 权限逻辑：(是公开的) OR (是自己的)
             // (user_id == '0' && is_public == '1') || user_id == '123'
             filter.append("( (user_id == '0' && is_public == '1') || user_id == '")
                   .append(request.getUserId())
                   .append("' )");
         }
-        
+
         // 应用过滤器
         String filterExpr = filter.toString();
         if (!filterExpr.isEmpty()) {

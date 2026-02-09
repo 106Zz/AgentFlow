@@ -9,6 +9,10 @@ import com.agenthub.api.agent_engine.service.ReflectionService;
 import com.agenthub.api.agent_engine.tool.AgentTool;
 import com.agenthub.api.ai.domain.llm.StreamCallback;
 import com.agenthub.api.ai.service.PowerKnowledgeService;
+import com.agenthub.api.prompt.builder.CaseSnapshotBuilder;
+import com.agenthub.api.prompt.enums.CaseStatus;
+import com.agenthub.api.prompt.enums.Scenario;
+import com.agenthub.api.prompt.service.ICaseSnapshotService;
 import com.agenthub.api.prompt.service.ISysPromptService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -25,6 +29,7 @@ import reactor.core.publisher.Flux;
 
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 import java.util.stream.Collectors;
 
 /**
@@ -80,8 +85,17 @@ public class SinglePassExecutor {
     private final ReflectionService reflectionService;
     private final ChatMemoryRepository chatMemoryRepository;
     private final ISysPromptService sysPromptService;
+    private final ICaseSnapshotService caseSnapshotService;
     private final ObjectMapper objectMapper;
     private final DashScopeNativeService nativeService;
+
+    // ==================== 线程池 ====================
+
+    /** Judge 审计专用线程池 */
+    private final Executor judgeExecutor;
+
+    /** Agent 工作线程池 (用于工具执行等 IO 密集型任务) */
+    private final Executor agentWorkerExecutor;
 
     // ==================== 常量配置 ====================
 
@@ -110,8 +124,11 @@ public class SinglePassExecutor {
             ReflectionService reflectionService,
             ChatMemoryRepository chatMemoryRepository,
             ISysPromptService sysPromptService,
+            ICaseSnapshotService caseSnapshotService,
             ObjectMapper objectMapper,
-            DashScopeNativeService nativeService) {
+            DashScopeNativeService nativeService,
+            Executor judgeExecutor,
+            Executor agentWorkerExecutor) {
         this.workerClient = workerClient;
         this.intentRecognition = intentRecognition;
         this.powerKnowledgeService = powerKnowledgeService;
@@ -119,8 +136,11 @@ public class SinglePassExecutor {
         this.reflectionService = reflectionService;
         this.chatMemoryRepository = chatMemoryRepository;
         this.sysPromptService = sysPromptService;
+        this.caseSnapshotService = caseSnapshotService;
         this.objectMapper = objectMapper;
         this.nativeService = nativeService;
+        this.judgeExecutor = judgeExecutor;
+        this.agentWorkerExecutor = agentWorkerExecutor;
     }
 
     // ==================== 核心执行方法 ====================
@@ -203,6 +223,8 @@ public class SinglePassExecutor {
                             saveToMemory(context, thinkingContent.toString(), fullAnswer.toString());
 
                             // ==================== 6. 异步 Judge 审计 ====================
+                            log.info("[SinglePass] 开始异步 Judge 审计: sessionId={}, answerLength={}",
+                                    context.getSessionId(), fullAnswer.length());
                             asyncJudge(context, fullAnswer.toString());
 
                             sink.complete();
@@ -343,23 +365,175 @@ public class SinglePassExecutor {
 
     /**
      * 异步 Judge 审计
+     * <p>
+     * 1. 构建审计上下文（query, answer, preRetrievedContent, toolCallRecords, 历史记录）
+     * 2. 调用 ReflectionService.evaluate() 进行 AI 审计
+     * 3. 构建 CaseSnapshot 并冻结到数据库
+     * </p>
      */
     private void asyncJudge(AgentContext context, String answer) {
-        // 使用独立线程异步执行，不阻塞主流程
+        // 使用 Judge 专用线程池异步执行，不阻塞主流程
         CompletableFuture.runAsync(() -> {
             try {
-                // TODO: 构建 RAG 上下文并调用 Judge
-                // EvaluationResult eval = reflectionService.evaluate(
-                //     context.getQuery(),
-                //     answer,
-                //     buildRagContext(context)
-                // );
-                log.info("[SinglePass] Judge审计完成: sessionId={}", context.getSessionId());
+                long startTime = System.currentTimeMillis();
+                log.info("[Judge] ========== 开始审计 ==========");
+
+                // ==================== 1. 构建审计上下文 ====================
+                Map<String, Object> ragContext = buildRagContextForJudge(context);
+
+                log.info("[Judge] 审计上下文构建完成: toolCalls={}, hasPreRetrieved={}, hasHistory={}",
+                        context.hasToolCallRecords() ? context.getToolCallRecords().size() : 0,
+                        ragContext.containsKey("pre_retrieved_content"),
+                        ragContext.containsKey("conversation_history"));
+
+                // ==================== 2. 调用 ReflectionService 执行审计 ====================
+                EvaluationResult evalResult = reflectionService.evaluate(
+                        context.getQuery(),
+                        answer,
+                        ragContext
+                );
+
+                log.info("[Judge] 审计结果: sessionId={}, passed={}, reason='{}'",
+                        context.getSessionId(),
+                        evalResult.isPassed(),
+                        evalResult.getReason());
+
+                // ==================== 3. 构建并冻结 CaseSnapshot ====================
+                freezeCaseSnapshot(context, answer, evalResult, startTime);
+
+                log.info("[Judge] ========== 审计完成 ==========");
 
             } catch (Exception e) {
-                log.error("[SinglePass] Judge审计失败: sessionId={}", context.getSessionId(), e);
+                log.error("[Judge] 审计失败: sessionId={}", context.getSessionId(), e);
+                // 审计失败也要尝试保存 CaseSnapshot（标记为失败状态）
+                try {
+                    freezeFailedCaseSnapshot(context, answer, e);
+                } catch (Exception ex) {
+                    log.error("[Judge] 保存失败 CaseSnapshot 也失败了", ex);
+                }
             }
-        });
+        }, judgeExecutor);
+    }
+
+    /**
+     * 构建 Judge 审计上下文
+     */
+    private Map<String, Object> buildRagContextForJudge(AgentContext context) {
+        Map<String, Object> ragContext = new HashMap<>();
+
+        // 1. 预检索内容（最重要）
+        if (context.getPreRetrievedContent() != null) {
+            ragContext.put("pre_retrieved_content", context.getPreRetrievedContent());
+        }
+
+        // 2. 工具调用记录（列表格式，适配 FreeMarker 模板）
+        if (context.hasToolCallRecords()) {
+            List<Map<String, Object>> toolCallsList = new ArrayList<>();
+            for (ToolCallRecord record : context.getToolCallRecords()) {
+                Map<String, Object> tcMap = new HashMap<>();
+                if (record.toolCall() != null) {
+                    tcMap.put("tool_name", record.toolCall().toolName());
+                    tcMap.put("parameters", record.toolCall().parameters());
+                }
+                if (record.toolResult() != null) {
+                    tcMap.put("success", record.toolResult().success());
+                    tcMap.put("result", record.toolResult().result());
+                    tcMap.put("error", record.toolResult().errorMessage());
+                    tcMap.put("duration_ms", record.toolResult().durationMs());
+                }
+                toolCallsList.add(tcMap);
+            }
+            ragContext.put("tool_calls", toolCallsList);
+        }
+
+        // 3. 意图信息
+        if (context.getIntent() != null) {
+            ragContext.put("intent", context.getIntent().name());
+        }
+        if (context.getIntentConfidence() != null) {
+            ragContext.put("intent_confidence", context.getIntentConfidence());
+        }
+
+        // 4. 最近的历史记录（2-3轮，即6条消息）
+        try {
+            List<Message> history = chatMemoryRepository.findByConversationId(context.getSessionId());
+            if (history != null && !history.isEmpty()) {
+                int maxMessages = Math.min(6, history.size());
+                List<Message> recentHistory = history.subList(
+                        Math.max(0, history.size() - maxMessages),
+                        history.size()
+                );
+                StringBuilder historySummary = new StringBuilder();
+                for (Message msg : recentHistory) {
+                    String role = msg instanceof UserMessage ? "用户" : "助手";
+                    String content = msg.getText();
+                    if (content != null && content.length() > 200) {
+                        content = content.substring(0, 200) + "...";
+                    }
+                    historySummary.append(String.format("[%s]: %s\n", role, content));
+                }
+                ragContext.put("conversation_history", historySummary.toString());
+            }
+        } catch (Exception e) {
+            log.warn("[SinglePass] 获取历史记录失败: {}", e.getMessage());
+        }
+
+        return ragContext;
+    }
+
+    /**
+     * 冻结 CaseSnapshot 到数据库
+     */
+    private void freezeCaseSnapshot(AgentContext context, String answer,
+                                     EvaluationResult evalResult, long startTime) {
+        try {
+            log.info("[CaseSnapshot] 开始冻结: sessionId={}, passed={}",
+                    context.getSessionId(), evalResult.isPassed());
+
+            // 使用 Builder 构建 CaseSnapshot
+            var snapshot = CaseSnapshotBuilder.create()
+                    .scenario(Scenario.CHAT)
+                    .intent(context.getIntent() != null ? context.getIntent().name() : "UNKNOWN")
+                    .input(context.getQuery(),
+                            context.getUserId() != null ? Long.parseLong(context.getUserId()) : null,
+                            context.getSessionId())
+                    .outputData(answer, System.currentTimeMillis() - startTime, null)
+                    .status(CaseStatus.COMPLETED)
+                    .durationMs((int) (System.currentTimeMillis() - startTime))
+                    .toolCallRecords(context.getToolCallRecords())
+                    .aiJudgeResult(evalResult.isPassed(), evalResult.getReason(), null)
+                    .metadata("intent_confidence",
+                            context.getIntentConfidence() != null ?
+                                    String.valueOf(context.getIntentConfidence()) : "N/A")
+                    .build();
+
+            // 异步保存到数据库
+            caseSnapshotService.freezeAsync(snapshot);
+
+            log.info("[CaseSnapshot] 已提交冻结: sessionId={}", context.getSessionId());
+
+        } catch (Exception e) {
+            log.error("[CaseSnapshot] 构建失败", e);
+        }
+    }
+
+    /**
+     * 冻结失败状态的 CaseSnapshot
+     */
+    private void freezeFailedCaseSnapshot(AgentContext context, String answer, Exception error) {
+        var snapshot = CaseSnapshotBuilder.create()
+                .scenario(Scenario.CHAT)
+                .intent(context.getIntent() != null ? context.getIntent().name() : "UNKNOWN")
+                .input(context.getQuery(),
+                        context.getUserId() != null ? Long.parseLong(context.getUserId()) : null,
+                        context.getSessionId())
+                .outputData(answer, null, null)
+                .status(CaseStatus.FAILED)
+                .errorMessage("Judge审计失败: " + error.getMessage())
+                .toolCallRecords(context.getToolCallRecords())
+                .build();
+
+        caseSnapshotService.freezeAsync(snapshot);
     }
 
     /**
@@ -547,7 +721,7 @@ public class SinglePassExecutor {
         // 关键点：在主线程捕获 SecurityContext，防止异步线程丢失认证信息
         SecurityContext mainThreadSecurityContext = SecurityContextHolder.getContext();
 
-        // 异步执行工具
+        // 使用 Agent 工作线程池异步执行工具
         CompletableFuture.runAsync(() -> {
             // 在异步线程中设置 SecurityContext
             SecurityContextHolder.setContext(mainThreadSecurityContext);
@@ -584,16 +758,28 @@ public class SinglePassExecutor {
                                 .originalCallId(tc.callId())
                                 .build();
 
+                        long execStart = System.currentTimeMillis();
                         ToolExecutionResult result = tool.execute(request, context);
+                        long execDuration = System.currentTimeMillis() - execStart;
 
                         if (result.isSuccess()) {
                             toolResults.put(toolName, result.getOutput() != null ? result.getOutput() : "");
+                            // 记录成功的工具调用
+                            context.addToolCallRecord(ToolCallRecord.of(
+                                    tc,
+                                    ToolResult.success(toolName, result.getOutput(), execDuration)
+                            ));
                         } else {
                             String errorMsg = String.format("工具执行失败: %s",
                                     result.getErrorMessage() != null ? result.getErrorMessage() : "未知错误");
                             sink.next("\n\n" + errorMsg + "\n");
                             toolResults.put(toolName, errorMsg);
                             hasFailure = true;
+                            // 记录失败的工具调用
+                            context.addToolCallRecord(ToolCallRecord.of(
+                                    tc,
+                                    ToolResult.failure(toolName, result.getErrorMessage(), execDuration, tc.callId())
+                            ));
                         }
 
                     } catch (Exception e) {
@@ -602,6 +788,11 @@ public class SinglePassExecutor {
                         sink.next("\n\n" + errorMsg + "\n");
                         toolResults.put(toolName, errorMsg);
                         hasFailure = true;
+                        // 记录异常的工具调用
+                        context.addToolCallRecord(ToolCallRecord.of(
+                                tc,
+                                ToolResult.failure(toolName, e.getMessage(), 0, tc.callId())
+                        ));
                     }
                 }
 
@@ -620,7 +811,7 @@ public class SinglePassExecutor {
                 SecurityContextHolder.clearContext();
             }
 
-        }).exceptionally(e -> {
+        }, agentWorkerExecutor).exceptionally(e -> {
             log.error("[SinglePass] 工具执行异步异常", e);
             sink.next("\n\n【系统错误】工具执行过程中发生异常\n");
             sink.complete();
@@ -660,6 +851,8 @@ public class SinglePassExecutor {
         // 关键修复：第二轮 LLM 调用使用新的 state，不复用第一轮的 state
         // 每一轮 LLM 调用都是独立的思考过程，应该有独立的状态标记
         final boolean[] newState = new boolean[]{false, false}; // [0]=思考已开始, [1]=思考已结束
+        // 收集第二轮 LLM 生成的完整回答，用于 Judge 审计
+        final StringBuilder secondRoundAnswer = new StringBuilder();
 
         nativeService.deepThinkStream(WORKER_MODEL, dashMessages, List.of(), new StreamCallback() {
             @Override
@@ -672,6 +865,7 @@ public class SinglePassExecutor {
                         newState[0] = true;
                     }
                     sink.next(reasoning);
+                    secondRoundAnswer.append(reasoning);
                 }
             }
 
@@ -686,6 +880,7 @@ public class SinglePassExecutor {
                         newState[1] = true;
                     }
                     sink.next(content);
+                    secondRoundAnswer.append(content);
                 }
             }
 
@@ -700,6 +895,16 @@ public class SinglePassExecutor {
                 if (newState[0] && !newState[1]) {
                     sink.next("@@THINK_END@@");
                 }
+
+                // ========== 关键修复：第二轮 LLM 完成后也要调用 asyncJudge ==========
+                log.info("[SinglePass] 第二轮 LLM 生成完成，回答长度: {}", secondRoundAnswer.length());
+
+                // 保存记忆（第二轮的回答）
+                saveToMemory(context, "", secondRoundAnswer.toString());
+
+                // 异步 Judge 审计
+                asyncJudge(context, secondRoundAnswer.toString());
+
                 sink.complete();
             }
 

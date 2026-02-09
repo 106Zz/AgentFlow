@@ -110,17 +110,62 @@ public class AsyncConfig implements AsyncConfigurer {
     }
 
     @Bean("hybridSearchExecutor")
-    public Executor hybridSearchExecutor() {
+    public ThreadPoolTaskExecutor hybridSearchExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
         executor.setCorePoolSize(2);        // 核心线程数
         executor.setMaxPoolSize(4);         // 最大线程数
         executor.setQueueCapacity(10);      // 队列容量
-        executor.setThreadNamePrefix("hybrid-search-");
+        executor.setThreadNamePrefix("HybridSearch-");
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
         executor.setWaitForTasksToCompleteOnShutdown(true);
         executor.setAwaitTerminationSeconds(30);
         executor.initialize();
 
         log.info("【异步配置】混合检索线程池初始化完成");
+        return executor;
+    }
+
+    /**
+     * Judge 审计专用线程池
+     * 场景：异步执行 LLM Judge 审计，不阻塞主流程
+     * 特点：IO 密集型，调用量相对较小
+     */
+    @Bean(name = "judgeExecutor")
+    public ThreadPoolTaskExecutor judgeExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(2);       // Judge 调用量小，2个核心线程足够
+        executor.setMaxPoolSize(4);        // 突发时最多4个
+        executor.setQueueCapacity(50);     // 队列容量
+        executor.setKeepAliveSeconds(60);
+        executor.setThreadNamePrefix("Judge-");
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
+        executor.setWaitForTasksToCompleteOnShutdown(true);
+        executor.setAwaitTerminationSeconds(60);
+        executor.initialize();
+
+        log.info("Judge审计线程池初始化完成");
+        return executor;
+    }
+
+    /**
+     * SSE 流式响应专用线程池
+     * 场景：处理 SSE 长连接，每个连接需要一个线程持有
+     * 特点：连接数可能较多，需要较大的线程池
+     */
+    @Bean(name = "sseExecutor")
+    public ThreadPoolTaskExecutor sseExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(10);      // SSE 长连接，需要较多线程
+        executor.setMaxPoolSize(50);       // 最多支持 50 个并发 SSE 连接
+        executor.setQueueCapacity(100);
+        executor.setKeepAliveSeconds(60);
+        executor.setThreadNamePrefix("SSE-");
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
+        executor.setWaitForTasksToCompleteOnShutdown(true);
+        executor.setAwaitTerminationSeconds(60);
+        executor.initialize();
+
+        log.info("SSE流式响应线程池初始化完成");
         return executor;
     }
 
