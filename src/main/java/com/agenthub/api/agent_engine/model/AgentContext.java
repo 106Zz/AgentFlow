@@ -72,6 +72,24 @@ public class AgentContext {
         return this.toolCallRecords != null && !this.toolCallRecords.isEmpty();
     }
 
+    // ========== v2.2 新增：来源文件列表 ==========
+
+    /**
+     * 来源文件列表 (用于前端渲染下载链接)
+     * <p>知识库检索后填充，包含文件名和 OSS 下载链接</p>
+     */
+    private List<SourceDocument> sources;
+
+    /**
+     * 来源文件记录（简化版，用于 SSE 传输）
+     */
+    @Data
+    @Builder
+    public static class SourceDocument {
+        private String filename;
+        private String downloadUrl;
+    }
+
     // 扩展字段，用于存储临时的会话状态或用户画像标签
     private Map<String, Object> attributes;
 }

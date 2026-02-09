@@ -43,6 +43,14 @@ public interface ChatHistoryMapper extends BaseMapper<ChatHistory> {
     int updateAnswer(@Param("id") Long id, @Param("answer") String answer, @Param("status") String status);
 
     /**
+     * 更新回答内容和来源文件
+     */
+    @Update("UPDATE chat_history SET answer = #{answer}, status = #{status}, sources = #{sourcesJson}::jsonb " +
+            "WHERE id = #{id}")
+    int updateAnswerAndSources(@Param("id") Long id, @Param("answer") String answer,
+                               @Param("status") String status, @Param("sourcesJson") String sourcesJson);
+
+    /**
      * 标记生成中断
      */
     @Update("UPDATE chat_history SET status = 'interrupted', error_message = #{errorMsg} " +

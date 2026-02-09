@@ -33,6 +33,7 @@ public class PowerKnowledgeService {
         private final IHybridSearchService hybridSearchService;
         private final OSS ossClient;
         private final EvidenceAssembly evidenceAssembly;  // 新增：证据组装器
+        private final com.agenthub.api.knowledge.mapper.KnowledgeBaseMapper knowledgeBaseMapper;  // 用于查询正确的 OSS 路径
 
         @Value("${aliyun.oss.bucketName:agenthub-knowledge}")
         private String bucketName;
@@ -194,16 +195,50 @@ public class PowerKnowledgeService {
                         .collect(Collectors.toList());
 
                 // B. 提取来源 + 生成 OSS 链接
-                // 核心逻辑：从 Document 的 metadata 里拿出 "filename" 字段，然后去重
+                // 核心逻辑：优先使用 metadata 中的 file_path（OSS完整路径）
+                // 如果 file_path 不是有效的 OSS 路径（旧数据），则从数据库查询正确的路径
                 List<PowerKnowledgeResult.SourceDocument> sources = documents.stream()
-                        .map(d -> d.getMetadata().getOrDefault("filename", "unknown").toString())
-                        .distinct()
-                        .map(filename -> {
-                                // 调用下面的私有方法生成带签名的安全链接
-                                String signedUrl = generatePresignedUrl(filename);
-                                log.info("[PowerKnowledgeService] 生成 OSS 链接: filename={}, url={}", filename, signedUrl);
+                        .map(d -> {
+                                String filename = d.getMetadata().getOrDefault("filename", "unknown").toString();
+                                String filePath = d.getMetadata().getOrDefault("file_path", "").toString();
+                                boolean validPath = false;
+
+                                // 检查 file_path 是否是有效的 OSS 路径
+                                // 有效路径应该以 "knowledge/" 开头
+                                if (filePath.startsWith("knowledge/")) {
+                                        validPath = true;
+                                } else {
+                                        // 旧数据：file_path 只是文件名，需要从数据库查询正确的 OSS 路径
+                                        String knowledgeIdStr = d.getMetadata().getOrDefault("knowledge_id", "").toString();
+                                        if (!knowledgeIdStr.isEmpty()) {
+                                                try {
+                                                        Long knowledgeId = Long.parseLong(knowledgeIdStr);
+                                                        var kb = knowledgeBaseMapper.selectById(knowledgeId);
+                                                        if (kb != null && kb.getFilePath() != null && kb.getFilePath().startsWith("knowledge/")) {
+                                                                filePath = kb.getFilePath();
+                                                                validPath = true;
+                                                                log.debug("[PowerKnowledgeService] 从数据库查询到正确的 OSS 路径: knowledgeId={}, filePath={}",
+                                                                        knowledgeId, filePath);
+                                                        }
+                                                } catch (Exception e) {
+                                                        log.warn("[PowerKnowledgeService] 查询数据库失败: {}", e.getMessage());
+                                                }
+                                        }
+                                }
+
+                                String signedUrl = "";
+                                if (validPath) {
+                                        signedUrl = generatePresignedUrl(filePath);
+                                }
+
+                                log.info("[PowerKnowledgeService] 生成 OSS 链接: filename={}, filePath={}, url={}, validPath={}",
+                                        filename, filePath,
+                                        signedUrl.isEmpty() ? "(空)" : signedUrl.substring(0, Math.min(50, signedUrl.length())),
+                                        validPath);
+
                                 return new PowerKnowledgeResult.SourceDocument(filename, signedUrl);
                         })
+                        .distinct()  // 根据完整路径去重
                         .collect(Collectors.toList());
 
                 log.info("[PowerKnowledgeService] sources 列表: {}", sources);
@@ -267,11 +302,16 @@ public class PowerKnowledgeService {
                         // 设置 URL 过期时间为 1 小时
                         Date expiration = new Date(new Date().getTime() + 3600 * 1000);
 
+                        log.info("[PowerKnowledgeService] 开始生成 OSS 链接: bucket={}, object={}", bucketName, objectName);
+
                         // 生成 URL
                         URL url = ossClient.generatePresignedUrl(bucketName, objectName, expiration);
-                        return url.toString();
+                        String urlString = url.toString();
+                        log.info("[PowerKnowledgeService] OSS 链接生成成功: {}", urlString);
+                        return urlString;
                 } catch (Exception e) {
-                        log.error("生成 OSS 签名链接失败: {}", objectName, e);
+                        log.error("[PowerKnowledgeService] 生成 OSS 签名链接失败: bucket={}, object={}, error={}",
+                                bucketName, objectName, e.getMessage(), e);
                         return "";
                 }
         }

@@ -427,20 +427,103 @@ public class VectorStoreHelper {
 
     /**
      * 存储向量并同步批量构建BM25索引
+     * v4.4 - 添加 DashScope 嵌入 API 调用重试机制
      */
     private void storeWithIndex(List<Document> chunks, Long knowledgeId, Long userId) {
         for (int i = 0; i < chunks.size(); i += VECTOR_BATCH_SIZE) {
             int end = Math.min(i + VECTOR_BATCH_SIZE, chunks.size());
             List<Document> batch = chunks.subList(i, end);
 
-            // 存储向量
-            vectorStore.add(batch);
-
+            // 存储向量（带重试）
+            storeVectorWithRetry(batch, i + 1, end, chunks.size());
 
             bm25IndexService.batchIndexDocuments(batch, knowledgeId, userId);
-
-            log.info("【写入向量库】已存储 {}-{} / {} 块", i + 1, end, chunks.size());
         }
+    }
+
+    /**
+     * 存储向量批次（带指数退避重试）
+     * <p>处理 DashScope API 临时网络错误、限流等问题</p>
+     *
+     * @param batch    当前批次文档
+     * @param startNum 起始编号（用于日志）
+     * @param endNum   结束编号
+     * @param total    总数量
+     */
+    private void storeVectorWithRetry(List<Document> batch, int startNum, int endNum, int total) {
+        final int maxRetries = 3;
+        int attempt = 0;
+        boolean success = false;
+
+        while (attempt < maxRetries && !success) {
+            attempt++;
+            try {
+                vectorStore.add(batch);
+                log.info("【写入向量库】已存储 {}-{} / {} 块 (尝试 {} 次)",
+                        startNum, endNum, total, attempt);
+                success = true;
+            } catch (Exception e) {
+                String errorMsg = e.getMessage();
+                boolean isRetryable = isRetryableError(errorMsg);
+
+                log.warn("【写入向量库失败】批次 {}-{}，尝试 {}/{}，错误: {}，可重试: {}",
+                        startNum, endNum, attempt, maxRetries,
+                        errorMsg != null ? errorMsg.substring(0, Math.min(100, errorMsg.length())) : "unknown",
+                        isRetryable);
+
+                if (!isRetryable || attempt >= maxRetries) {
+                    // 不可重试的错误或已达最大重试次数
+                    throw new RuntimeException(
+                            String.format("向量存储失败（批次 %d-%d，尝试 %d 次）: %s",
+                                    startNum, endNum, attempt, errorMsg),
+                            e
+                    );
+                }
+
+                // 指数退避：第1次等1秒，第2次等2秒，第3次等4秒
+                long backoffMs = 1000L * (1L << (attempt - 1));
+                try {
+                    Thread.sleep(backoffMs);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw new RuntimeException("向量存储重试被中断", ie);
+                }
+            }
+        }
+    }
+
+    /**
+     * 判断错误是否可重试
+     */
+    private boolean isRetryableError(String errorMsg) {
+        if (errorMsg == null) {
+            return false;
+        }
+
+        String lowerMsg = errorMsg.toLowerCase();
+
+        // 网络相关错误
+        if (lowerMsg.contains("failed to respond") ||
+                lowerMsg.contains("connection") ||
+                lowerMsg.contains("timeout") ||
+                lowerMsg.contains("network")) {
+            return true;
+        }
+
+        // 限流错误
+        if (lowerMsg.contains("rate limit") ||
+                lowerMsg.contains("429") ||
+                lowerMsg.contains("too many requests")) {
+            return true;
+        }
+
+        // DashScope 服务错误
+        if (lowerMsg.contains("dashscope") &&
+                (lowerMsg.contains("503") || lowerMsg.contains("502"))) {
+            return true;
+        }
+
+        return false;
     }
 
     // ==================== 删除方法 ====================
