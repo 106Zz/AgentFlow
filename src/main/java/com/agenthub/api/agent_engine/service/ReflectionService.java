@@ -69,7 +69,7 @@ public class ReflectionService {
      * @return 审计结果
      */
     public EvaluationResult evaluate(String query, String answer, Object ragContext) {
-        log.info("[Judge] Starting evaluation for query: {}", query);
+        log.info("[Judge] 开始评估: query='{}', answerLength={}", query, answer != null ? answer.length() : 0);
 
         try {
             // 1. 准备 Prompt 变量
@@ -84,12 +84,19 @@ public class ReflectionService {
                 vars.put("documents", ragContext);
             }
 
+            log.info("[Judge] Prompt 变量: preRetrieved={}, toolCalls={}, history={}",
+                    vars.containsKey("pre_retrieved_content"),
+                    vars.containsKey("tool_calls"),
+                    vars.containsKey("conversation_history"));
+
             // 2. 渲染 System Prompt
             String systemPrompt = sysPromptService.render(JUDGE_PROMPT_CODE, vars);
             if (systemPrompt == null || systemPrompt.isEmpty()) {
                 log.warn("[Judge] Prompt rendered empty, using fallback.");
                 systemPrompt = buildFallbackPrompt(vars);
             }
+
+            log.debug("[Judge] System Prompt 长度: {}", systemPrompt.length());
 
             // 3. 调用 Judge 模型
             String result = judgeClient.prompt()
@@ -98,13 +105,15 @@ public class ReflectionService {
                     .call()
                     .content();
 
-            log.info("[Judge] Evaluation result: {}", result);
+            log.info("[Judge] Judge 模型返回: {}", result);
 
             // 4. 解析结果
-            return parseResult(result);
+            EvaluationResult parsed = parseResult(result);
+            log.info("[Judge] 解析结果: passed={}, reason='{}'", parsed.isPassed(), parsed.getReason());
+            return parsed;
 
         } catch (Exception e) {
-            log.error("[Judge] Evaluation failed", e);
+            log.error("[Judge] 评估失败", e);
             // 降级策略：报错默认通过，避免阻塞用户
             return EvaluationResult.pass("Evaluation error: " + e.getMessage());
         }
@@ -112,37 +121,68 @@ public class ReflectionService {
 
     /**
      * 构建备用提示词（当数据库中没有配置时）
+     * <p>支持工具调用记录、预检索内容、历史对话等上下文</p>
      */
     private String buildFallbackPrompt(Map<String, Object> vars) {
-        return "【重要时间上下文】当前时间是 2026 年 2 月。你不是 2024 年的模型，现在是 2026 年。\n\n"
-            + "你是一个严格的内容质量审计专家。请仔细审计以下回答：\n\n"
-            + "【用户问题】\n" + vars.get("user_query") + "\n\n"
-            + "【Agent 回答】\n" + vars.get("agent_answer") + "\n\n"
-            + "【审计标准】\n\n"
-            + "== 1. 幻觉检测（最重要）==\n"
-            + "❌ 以下情况判定为 FAIL：\n"
-            + "   - 编造了检索结果中不存在的事实、数据、日期、价格、法规条款等\n"
-            + "   - 声称\"根据知识库\"或\"根据搜索结果\"但内容与检索结果不符\n"
-            + "   - 引用了具体的文档号、文件名、政策名称但在检索结果中找不到\n"
-            + "   - 对检索结果进行了不合理的延伸或夸大\n"
-            + "✅ 以下情况判定为 PASS：\n"
-            + "   - 所有事实性陈述都能在检索结果中找到依据\n"
-            + "   - 对不确定的信息使用了\"可能\"、\"约\"、\"预计\"等限定词\n"
-            + "   - 检索结果中没有答案时，诚实说明\"抱歉，我暂时没有找到相关信息\"\n\n"
-            + "== 2. 来源标注 ==\n"
-            + "❌ 未说明信息来源\n"
-            + "✅ 明确说明：\"根据广东电力市场知识库...\" / \"根据网上搜索结果...\" / \"根据通用常识...\"\n\n"
-            + "== 3. 问题相关性 ==\n"
-            + "❌ 回答与用户问题无关或偏离主题\n"
-            + "✅ 直接回答了用户的问题\n\n"
-            + "== 4. 回答完整性 ==\n"
-            + "❌ 回答不完整或中途中断\n"
-            + "✅ 提供了完整的回答\n\n"
-            + "【特别说明】：现在是 2026 年，2026 年的数据属于当前/历史数据，不是未来信息。如果知识库中有 2026 年的数据，回答中引用这些数据是正确的。\n\n"
-            + "【输出格式】\n"
-            + "只输出以下两种之一：\n"
-            + "PASS\n"
-            + "FAIL: 具体原因（如：存在幻觉，编造了XX数据；未说明来源；回答不完整等）";
+        StringBuilder sb = new StringBuilder();
+
+        sb.append("【重要时间上下文】当前时间是 2026 年 2 月。你不是 2024 年的模型，现在是 2026 年。\n\n");
+        sb.append("你是一个严格的内容质量审计专家。请仔细审计以下回答：\n\n");
+
+        sb.append("【用户问题】\n").append(vars.get("user_query")).append("\n\n");
+        sb.append("【Agent 回答】\n").append(vars.get("agent_answer")).append("\n\n");
+
+        // 预检索内容（如果有）
+        if (vars.containsKey("pre_retrieved_content") && vars.get("pre_retrieved_content") != null) {
+            String preRetrieved = vars.get("pre_retrieved_content").toString();
+            if (preRetrieved.length() > 3000) {
+                preRetrieved = preRetrieved.substring(0, 3000) + "\n\n...(内容过长，已截断)";
+            }
+            sb.append("【预检索内容（知识库）】\n").append(preRetrieved).append("\n\n");
+        }
+
+        // 工具调用记录（如果有）
+        if (vars.containsKey("tool_calls") && vars.get("tool_calls") != null) {
+            sb.append("【工具调用记录】\n").append(vars.get("tool_calls")).append("\n\n");
+        }
+
+        // 历史对话（如果有）
+        if (vars.containsKey("conversation_history") && vars.get("conversation_history") != null) {
+            sb.append("【最近对话历史】\n").append(vars.get("conversation_history")).append("\n\n");
+        }
+
+        // 文档内容（如果有，兼容旧版）
+        if (vars.containsKey("documents") && vars.get("documents") != null) {
+            sb.append("【检索文档】\n").append(vars.get("documents")).append("\n\n");
+        }
+
+        sb.append("【审计标准】\n\n");
+        sb.append("== 1. 幻觉检测（最重要）==\n");
+        sb.append("❌ 以下情况判定为 FAIL：\n");
+        sb.append("   - 编造了检索结果中不存在的事实、数据、日期、价格、法规条款等\n");
+        sb.append("   - 声称\"根据知识库\"或\"根据搜索结果\"但内容与检索结果不符\n");
+        sb.append("   - 引用了具体的文档号、文件名、政策名称但在检索结果中找不到\n");
+        sb.append("   - 对检索结果进行了不合理的延伸或夸大\n");
+        sb.append("✅ 以下情况判定为 PASS：\n");
+        sb.append("   - 所有事实性陈述都能在检索结果中找到依据\n");
+        sb.append("   - 对不确定的信息使用了\"可能\"、\"约\"、\"预计\"等限定词\n");
+        sb.append("   - 检索结果中没有答案时，诚实说明\"抱歉，我暂时没有找到相关信息\"\n\n");
+        sb.append("== 2. 来源标注 ==\n");
+        sb.append("❌ 未说明信息来源\n");
+        sb.append("✅ 明确说明：\"根据广东电力市场知识库...\" / \"根据网上搜索结果...\" / \"根据通用常识...\"\n\n");
+        sb.append("== 3. 问题相关性 ==\n");
+        sb.append("❌ 回答与用户问题无关或偏离主题\n");
+        sb.append("✅ 直接回答了用户的问题\n\n");
+        sb.append("== 4. 回答完整性 ==\n");
+        sb.append("❌ 回答不完整或中途中断\n");
+        sb.append("✅ 提供了完整的回答\n\n");
+        sb.append("【特别说明】：现在是 2026 年，2026 年的数据属于当前/历史数据，不是未来信息。如果知识库中有 2026 年的数据，回答中引用这些数据是正确的。\n\n");
+        sb.append("【输出格式】\n");
+        sb.append("只输出以下两种之一：\n");
+        sb.append("PASS\n");
+        sb.append("FAIL: 具体原因（如：存在幻觉，编造了XX数据；未说明来源；回答不完整等）");
+
+        return sb.toString();
     }
 
     /**

@@ -22,8 +22,6 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import java.io.IOException;
 import java.util.UUID;
 import java.util.concurrent.Executor;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 @Slf4j
 @RestController
@@ -35,7 +33,7 @@ public class AgentV2Controller {
     private final IChatHistoryService chatHistoryService;
     private final IChatSessionService chatSessionService;
     private final Executor taskExecutor;
-    private final ExecutorService sseExecutor = Executors.newCachedThreadPool();
+    private final Executor sseExecutor;  // 由 Spring 按名称注入 sseExecutor Bean
 
     @CrossOrigin(origins = "*", maxAge = 3600)
     @PostMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -87,7 +85,7 @@ public class AgentV2Controller {
                 .build();
 
         // 异步执行
-        sseExecutor.submit(() -> {
+        sseExecutor.execute(() -> {
             SecurityContextHolder.setContext(mainThreadSecurityContext);
             
             // 分离缓冲区，分别收集思考过程和正文 (用于持久化)

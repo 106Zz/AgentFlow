@@ -3,6 +3,8 @@ package com.agenthub.api.agent_engine.model;
 import lombok.Builder;
 import lombok.Data;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -42,6 +44,33 @@ public class AgentContext {
      * <p>用于避免在 LLM 阶段重复调用 knowledge_search</p>
      */
     private boolean preRetrievalDone;
+
+    // ========== v2.1 新增：工具调用记录 ==========
+
+    /**
+     * 工具调用记录列表
+     * <p>记录本次对话中所有工具调用及其结果，用于 Judge 审计</p>
+     */
+    private List<ToolCallRecord> toolCallRecords;
+
+    /**
+     * 添加工具调用记录
+     *
+     * @param record 工具调用记录
+     */
+    public void addToolCallRecord(ToolCallRecord record) {
+        if (this.toolCallRecords == null) {
+            this.toolCallRecords = new ArrayList<>();
+        }
+        this.toolCallRecords.add(record);
+    }
+
+    /**
+     * 是否有工具调用记录
+     */
+    public boolean hasToolCallRecords() {
+        return this.toolCallRecords != null && !this.toolCallRecords.isEmpty();
+    }
 
     // 扩展字段，用于存储临时的会话状态或用户画像标签
     private Map<String, Object> attributes;

@@ -1,5 +1,6 @@
 package com.agenthub.api.prompt.builder;
 
+import com.agenthub.api.agent_engine.model.ToolCallRecord;
 import com.agenthub.api.prompt.context.PromptContext;
 import com.agenthub.api.prompt.context.PromptContextHolder;
 import com.agenthub.api.prompt.domain.entity.CaseSnapshot;
@@ -12,6 +13,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.extern.slf4j.Slf4j;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -265,6 +267,82 @@ public class CaseSnapshotBuilder {
         } catch (Exception e) {
             log.warn("[CaseSnapshotBuilder] 设置元数据失败: {}", e.getMessage());
         }
+        return this;
+    }
+
+    /**
+     * 设置工具调用记录
+     * <p>将工具调用记录序列化到 contextData 中</p>
+     *
+     * @param toolCallRecords 工具调用记录列表
+     * @return this
+     */
+    public CaseSnapshotBuilder toolCallRecords(List<ToolCallRecord> toolCallRecords) {
+        if (toolCallRecords == null || toolCallRecords.isEmpty()) {
+            return this;
+        }
+        try {
+            ObjectNode contextNode;
+            if (this.snapshot.getContextData() != null && this.snapshot.getContextData().isObject()) {
+                contextNode = (ObjectNode) this.snapshot.getContextData();
+            } else {
+                contextNode = objectMapper.createObjectNode();
+            }
+
+            var toolCallsArray = contextNode.putArray("tool_call_records");
+            for (ToolCallRecord record : toolCallRecords) {
+                ObjectNode recordNode = objectMapper.createObjectNode();
+                if (record.toolCall() != null) {
+                    recordNode.put("tool_name", record.toolCall().toolName());
+                    recordNode.put("parameters", record.toolCall().parameters());
+                    recordNode.put("call_id", record.toolCall().callId());
+                }
+                if (record.toolResult() != null) {
+                    recordNode.put("success", record.toolResult().success());
+                    recordNode.put("result", record.toolResult().result());
+                    recordNode.put("error_message", record.toolResult().errorMessage());
+                    recordNode.put("duration_ms", record.toolResult().durationMs());
+                }
+                toolCallsArray.add(recordNode);
+            }
+
+            this.snapshot.setContextData(contextNode);
+        } catch (Exception e) {
+            log.warn("[CaseSnapshotBuilder] 设置工具调用记录失败: {}", e.getMessage());
+        }
+        return this;
+    }
+
+    /**
+     * 设置 AI Judge 结果
+     *
+     * @param passed    是否通过
+     * @param reason    原因（失败时）
+     * @param rawOutput Judge 模型原始输出
+     * @return this
+     */
+    public CaseSnapshotBuilder aiJudgeResult(boolean passed, String reason, String rawOutput) {
+        try {
+            ObjectNode judgeNode = objectMapper.createObjectNode();
+            judgeNode.put("passed", passed);
+            judgeNode.put("reason", reason);
+            judgeNode.put("raw_output", rawOutput);
+            judgeNode.put("judged_at", LocalDateTime.now().toString());
+            this.snapshot.setAiJudgeResult(judgeNode);
+        } catch (Exception e) {
+            log.warn("[CaseSnapshotBuilder] 设置 AI Judge 结果失败: {}", e.getMessage());
+        }
+        return this;
+    }
+
+    /**
+     * 设置 AI Judge 结果（直接设置 JsonNode）
+     *
+     * @param aiJudgeResult Judge 结果 JsonNode
+     * @return this
+     */
+    public CaseSnapshotBuilder aiJudgeResult(JsonNode aiJudgeResult) {
+        this.snapshot.setAiJudgeResult(aiJudgeResult);
         return this;
     }
 

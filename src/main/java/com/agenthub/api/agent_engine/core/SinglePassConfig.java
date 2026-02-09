@@ -5,12 +5,15 @@ import com.agenthub.api.agent_engine.service.IntentRecognitionService;
 import com.agenthub.api.ai.service.PowerKnowledgeService;
 import com.agenthub.api.agent_engine.service.ReflectionService;
 import com.agenthub.api.agent_engine.capability.ToolRegistry;
+import com.agenthub.api.prompt.service.ICaseSnapshotService;
 import com.agenthub.api.prompt.service.ISysPromptService;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.memory.ChatMemoryRepository;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+
+import java.util.concurrent.Executor;
 
 /**
  * 单次执行器配置
@@ -30,8 +33,11 @@ public class SinglePassConfig {
             ReflectionService reflectionService,
             ChatMemoryRepository chatMemoryRepository,
             ISysPromptService sysPromptService,
+            ICaseSnapshotService caseSnapshotService,
             com.fasterxml.jackson.databind.ObjectMapper objectMapper,
-            DashScopeNativeService nativeService) {
+            DashScopeNativeService nativeService,
+            @Qualifier("judgeExecutor") Executor judgeExecutor,
+            @Qualifier("agentWorkerExecutor") Executor agentWorkerExecutor) {
         return new SinglePassExecutor(
                 workerClient,
                 intentRecognition,
@@ -40,8 +46,11 @@ public class SinglePassConfig {
                 reflectionService,
                 chatMemoryRepository,
                 sysPromptService,
+                caseSnapshotService,
                 objectMapper,
-                nativeService
+                nativeService,
+                judgeExecutor,
+                agentWorkerExecutor
         );
     }
 }

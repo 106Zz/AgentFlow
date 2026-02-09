@@ -54,6 +54,7 @@ public class Bm25SearchServiceImpl implements IBm25SearchService {
     @Override
     public List<Bm25SearchResult> search(Bm25SearchRequest request) {
         long startTime = System.currentTimeMillis();
+        log.info("【BM25检索】开始: query='{}'", request.getQuery());
 
         // 步骤1：对查询进行分词
         List<String> queryTokens = tokenizer.tokenize(request.getQuery());
@@ -61,8 +62,6 @@ public class Bm25SearchServiceImpl implements IBm25SearchService {
             log.warn("【BM25检索】查询分词为空: {}", request.getQuery());
             return Collections.emptyList();
         }
-
-        log.debug("【BM25检索】查询分词: {}", queryTokens);
 
         // 步骤2：获取全局统计
         Bm25Stats totalDocsStats = statsMapper.selectById("total_docs");
@@ -123,7 +122,7 @@ public class Bm25SearchServiceImpl implements IBm25SearchService {
         }
 
         long elapsed = System.currentTimeMillis() - startTime;
-        log.info("【BM25检索】查询: '{}', 返回: {}, 耗时: {}ms",
+        log.info("【BM25检索】完成: query='{}', returned={}, elapsed={}ms",
                 request.getQuery(), results.size(), elapsed);
 
         return results;
@@ -178,8 +177,6 @@ public class Bm25SearchServiceImpl implements IBm25SearchService {
             double avgDocLength,
             Bm25SearchRequest request) {
 
-        long calcStartTime = System.currentTimeMillis();
-
         Map<String, BM25Score> scores = new HashMap<>();
 
         // 构建查询条件
@@ -211,8 +208,6 @@ public class Bm25SearchServiceImpl implements IBm25SearchService {
             for (Bm25Index index : indexList) {
                 docLengthMap.put(index.getInternalId(), index.getTokenCount());
             }
-            log.debug("【BM25】批量查询文档长度: {} 个文档, 耗时: {}ms",
-                    indexList.size(), System.currentTimeMillis() - calcStartTime);
         }
 
         // 对每个文档计算 BM25 分数
@@ -250,9 +245,6 @@ public class Bm25SearchServiceImpl implements IBm25SearchService {
             }
         }
 
-        log.debug("【BM25】计算分数完成: {} 个文档, 耗时: {}ms",
-                scores.size(), System.currentTimeMillis() - calcStartTime);
-
         return scores;
     }
 
@@ -284,8 +276,6 @@ public class Bm25SearchServiceImpl implements IBm25SearchService {
     private void fillDocumentContent(List<Bm25SearchResult> results) {
         if (results.isEmpty()) return;
 
-        long fillStartTime = System.currentTimeMillis();
-
         // 收集所有 internal_id（业务标识）
         List<String> internalIds = results.stream()
                 .map(Bm25SearchResult::getDocId)
@@ -305,9 +295,6 @@ public class Bm25SearchServiceImpl implements IBm25SearchService {
                 }
             }
 
-            log.debug("【BM25】批量查询 chunk 内容: {} 个 chunk, 耗时: {}ms",
-                    chunks.size(), System.currentTimeMillis() - fillStartTime);
-
         } catch (Exception e) {
             log.warn("【BM25】批量查询失败，降级为逐个查询", e);
             fillDocumentContentFallback(results);
@@ -315,22 +302,16 @@ public class Bm25SearchServiceImpl implements IBm25SearchService {
         }
 
         // 填充结果
-        int found = 0;
         for (Bm25SearchResult result : results) {
             VectorStoreDoc chunk = chunkMap.get(result.getDocId());
             if (chunk != null && chunk.getContent() != null) {
                 result.setContent(chunk.getContent());
                 result.setMetadata(parseMetadata(chunk.getMetadata()));
-                found++;
             } else {
-                log.warn("【BM25】未找到 chunk: internal_id={}", result.getDocId());
                 result.setContent("[chunk 内容未找到]");
                 result.setMetadata(new HashMap<>());
             }
         }
-
-        log.debug("【BM25】填充完成: {}/{} 个 chunk, 耗时: {}ms",
-                found, results.size(), System.currentTimeMillis() - fillStartTime);
     }
 
     /**
