@@ -42,6 +42,14 @@ public class RabbitMQConfig {
   public static final String FILE_UPLOAD_ROUTING_KEY = "file.upload";
   public static final String FILE_UPLOAD_DLQ_ROUTING_KEY = "file.upload.dlq";
 
+  // ==================== LLM 请求重试 ====================
+  public static final String LLM_DELAYED_EXCHANGE = "llm.delayed.exchange";
+  public static final String LLM_DLQ_EXCHANGE = "llm.dlq.exchange";
+  public static final String LLM_RETRY_QUEUE = "llm.retry.queue";
+  public static final String LLM_DLQ_QUEUE = "llm.dlq.queue";
+  public static final String LLM_RETRY_ROUTING_KEY = "llm.retry";
+  public static final String LLM_DLQ_ROUTING_KEY = "llm.dlq";
+
   /**
    * 延迟交换机（x-delayed-message 插件支持）
    */
@@ -251,5 +259,72 @@ public class RabbitMQConfig {
     return BindingBuilder.bind(fileUploadDlqQueue())
             .to(fileUploadDlqExchange())
             .with(FILE_UPLOAD_DLQ_ROUTING_KEY);
+  }
+
+  // ==================== LLM 请求重试配置 ====================
+
+  /**
+   * LLM 请求延迟交换机
+   */
+  @Bean
+  public CustomExchange llmDelayedExchange() {
+    return new CustomExchange(
+            LLM_DELAYED_EXCHANGE,
+            "x-delayed-message",
+            true,
+            false,
+            Map.of("x-delayed-type", "direct")
+    );
+  }
+
+  /**
+   * LLM 请求死信交换机
+   */
+  @Bean
+  public DirectExchange llmDlqExchange() {
+    return new DirectExchange(LLM_DLQ_EXCHANGE, true, false);
+  }
+
+  /**
+   * LLM 请求重试队列
+   */
+  @Bean
+  public Queue llmRetryQueue() {
+    return QueueBuilder.durable(LLM_RETRY_QUEUE)
+            .withArgument("x-dead-letter-exchange", LLM_DLQ_EXCHANGE)
+            .withArgument("x-dead-letter-routing-key", LLM_DLQ_ROUTING_KEY)
+            .build();
+  }
+
+  /**
+   * LLM 请求死信队列
+   */
+  @Bean
+  public Queue llmDlqQueue() {
+    return QueueBuilder.durable(LLM_DLQ_QUEUE).build();
+  }
+
+  /**
+   * 绑定：LLM 延迟交换机 → LLM 重试队列
+   */
+  @Bean
+  public Binding llmRetryBinding(Queue llmRetryQueue, CustomExchange llmDelayedExchange) {
+    return new Binding(
+            LLM_RETRY_QUEUE,
+            Binding.DestinationType.QUEUE,
+            LLM_DELAYED_EXCHANGE,
+            LLM_RETRY_ROUTING_KEY,
+            null
+    );
+  }
+
+  /**
+   * 绑定：LLM 死信交换机 → LLM 死信队列
+   */
+  @Bean
+  public Binding llmDlqBinding() {
+    return BindingBuilder.bind(llmDlqQueue())
+            .to(llmDlqExchange())
+            .with(LLM_DLQ_ROUTING_KEY);
   }
 }
