@@ -176,6 +176,7 @@ public class DocumentProcessServiceImpl {
     extraMetadata.put("tags", knowledge.getTags());
     extraMetadata.put("title", knowledge.getTitle());
     extraMetadata.put("file_type", knowledge.getFileType());
+    extraMetadata.put("file_path", knowledge.getFilePath());  // 添加 OSS 路径用于下载链接生成
 
     // 向量化处理（使用信号量控制并发）
     return processWithSemaphore(fileBytes, knowledge.getFileName(), knowledge.getFileSize(),

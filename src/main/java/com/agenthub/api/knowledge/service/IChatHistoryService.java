@@ -52,6 +52,16 @@ public interface IChatHistoryService extends IService<ChatHistory> {
     void updateAnswer(Long id, String answer, String status);
 
     /**
+     * 更新回答内容和来源文件
+     *
+     * @param id 回答记录ID
+     * @param answer 完整回答内容
+     * @param status 状态
+     * @param sourcesJson 来源文件 JSON 字符串
+     */
+    void updateAnswerWithSources(Long id, String answer, String status, String sourcesJson);
+
+    /**
      * 标记生成中断
      *
      * @param id 回答记录ID

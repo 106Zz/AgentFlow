@@ -127,6 +127,18 @@ public class ChatHistoryServiceImpl extends ServiceImpl<ChatHistoryMapper, ChatH
     }
 
     @Override
+    public void updateAnswerWithSources(Long id, String answer, String status, String sourcesJson) {
+        try {
+            chatHistoryMapper.updateAnswerAndSources(id, answer, status, sourcesJson);
+            log.info("回答内容和来源已更新: id={}, status={}, sources={}",
+                    id, status, sourcesJson != null ? sourcesJson.length() : 0);
+        } catch (Exception e) {
+            log.error("更新回答内容和来源失败: id={}", id, e);
+            // 不抛出异常，避免影响流式输出
+        }
+    }
+
+    @Override
     public void markAsInterrupted(Long id, String partialAnswer, String errorMsg) {
         try {
             // 构建最终回答（如果有部分内容则保留，否则显示中断标记）

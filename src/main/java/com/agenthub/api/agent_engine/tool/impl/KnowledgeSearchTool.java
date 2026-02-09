@@ -124,12 +124,23 @@ public class KnowledgeSearchTool implements AgentTool {
             }
         }
 
-        // 添加来源文件列表
+        // 添加来源文件列表（带下载链接，使用 Markdown 格式方便 LLM 复制）
         if (result.sources() != null && !result.sources().isEmpty()) {
-            sb.append("【来源文件】\n");
+            sb.append("【参考来源】\n");
+            int idx = 1;
             for (PowerKnowledgeResult.SourceDocument source : result.sources()) {
-                sb.append(String.format("- %s\n", source.filename()));
+                String url = source.downloadUrl();
+                // 使用 Markdown 格式：[文件名](URL)
+                // 这样 LLM 在引用时可以更容易复制格式
+                if (url != null && !url.isEmpty()) {
+                    sb.append(String.format("%d. [%s](%s)\n", idx++, source.filename(), url));
+                } else {
+                    sb.append(String.format("%d. %s（下载链接生成失败）\n", idx++, source.filename()));
+                }
             }
+            log.info("[KnowledgeSearchTool] 来源文件数量: {}, 第一个文件链接: {}",
+                    result.sources().size(),
+                    result.sources().get(0).downloadUrl());
         }
 
         return sb.toString();

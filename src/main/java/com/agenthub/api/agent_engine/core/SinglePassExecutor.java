@@ -194,6 +194,18 @@ public class SinglePassExecutor {
                         context.setPreRetrievedContent(evidenceContext);
                         context.setPreRetrievalDone(true);
 
+                        // v2.2 新增：保存 sources 到 context，供前端渲染
+                        if (knowledgeResult.sources() != null && !knowledgeResult.sources().isEmpty()) {
+                            List<AgentContext.SourceDocument> sources = knowledgeResult.sources().stream()
+                                    .map(src -> AgentContext.SourceDocument.builder()
+                                            .filename(src.filename())
+                                            .downloadUrl(src.downloadUrl())
+                                            .build())
+                                    .toList();
+                            context.setSources(sources);
+                            log.info("[SinglePass] 保存 sources 到 context: {} 个文件", sources.size());
+                        }
+
                         log.info("[SinglePass] 预检索完成: 耗时={}ms, evidenceBlocks={}",
                                 System.currentTimeMillis() - retrieveStart,
                                 knowledgeResult.getEvidenceBlockCount());

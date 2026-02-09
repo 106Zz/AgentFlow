@@ -20,6 +20,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.Executor;
 
@@ -87,11 +88,14 @@ public class AgentV2Controller {
         // 异步执行
         sseExecutor.execute(() -> {
             SecurityContextHolder.setContext(mainThreadSecurityContext);
-            
+
             // 分离缓冲区，分别收集思考过程和正文 (用于持久化)
             StringBuilder reasoningBuffer = new StringBuilder();
             StringBuilder contentBuffer = new StringBuilder();
-            
+
+            // v2.2 新增：保存 sources 供后续持久化
+            final List<AgentContext.SourceDocument>[] sourcesHolder = new List[]{null};
+
             // 状态机：标记当前是否处于思考模式
             final boolean[] isThinking = {false};
             
@@ -143,14 +147,26 @@ public class AgentV2Controller {
                         }
                     })
                     .doOnComplete(() -> {
-                        // 构建最终完整回答 (包含 <think> 标签，用于持久化)
+                        // v2.2 新增：发送 sources 事件（如果存在）并保存供持久化使用
+                        try {
+                            if (context.getSources() != null && !context.getSources().isEmpty()) {
+                                sourcesHolder[0] = context.getSources();
+                                String sourcesJson = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(context.getSources());
+                                emitter.send(SseEmitter.event().name("sources").data(sourcesJson));
+                                log.info("[SSE] 发送 sources 事件: {} 个文件", context.getSources().size());
+                            }
+                        } catch (Exception e) {
+                            log.warn("[SSE] 发送 sources 失败: {}", e.getMessage());
+                        }
+
+                        // 构建最终完整回答 (包含<think> 标签，用于持久化)
                         StringBuilder finalAnswer = new StringBuilder();
                         if (reasoningBuffer.length() > 0) {
                             finalAnswer.append("<think>").append(reasoningBuffer).append("</think>\n\n");
                         }
                         finalAnswer.append(contentBuffer);
                         
-                        handleComplete(sessionId, userIdLong, query, assistantIdHolder[0], finalAnswer.toString());
+                        handleComplete(sessionId, userIdLong, query, assistantIdHolder[0], finalAnswer.toString(), sourcesHolder[0]);
                         emitter.complete();
                     })
                     .doOnError(e -> {
@@ -175,11 +191,24 @@ public class AgentV2Controller {
         return emitter;
     }
 
-    private void handleComplete(String sessionId, Long userId, String query, Long assistantId, String answer) {
+    private void handleComplete(String sessionId, Long userId, String query, Long assistantId, String answer, java.util.List<AgentContext.SourceDocument> sources) {
         try {
             if (!answer.isEmpty()) {
                 if (assistantId != null) {
-                    chatHistoryService.updateAnswer(assistantId, answer, "completed");
+                    String sourcesJson = null;
+                    if (sources != null && !sources.isEmpty()) {
+                        try {
+                            sourcesJson = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(sources);
+                        } catch (Exception e) {
+                            log.warn("Sources serialization failed", e);
+                        }
+                    }
+
+                    if (sourcesJson != null) {
+                        chatHistoryService.updateAnswerWithSources(assistantId, answer, "completed", sourcesJson);
+                    } else {
+                        chatHistoryService.updateAnswer(assistantId, answer, "completed");
+                    }
                 } else {
                     chatHistoryService.saveChat(sessionId, userId, query, answer);
                 }
