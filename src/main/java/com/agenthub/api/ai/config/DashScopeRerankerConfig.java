@@ -30,22 +30,6 @@ public class DashScopeRerankerConfig {
             return documents;
         }
 
-//        if(documents.size()<=topN){
-//            log.info("候选文档数量 {} <= topN {}，无需 Rerank，保留原有分数", documents.size(), topN);
-//            // 保留原有分数作为 rerank_score（避免显示为 0）
-//            for (Document doc : documents) {
-//                Object originalScore = doc.getMetadata().get("hybrid_score");
-//                if (originalScore != null) {
-//                    doc.getMetadata().put("rerank_score", originalScore);
-//                } else {
-//                    Object vectorScore = doc.getMetadata().get("vector_score");
-//                    if (vectorScore != null) {
-//                        doc.getMetadata().put("rerank_score", vectorScore);
-//                    }
-//                }
-//            }
-//            return documents;
-//        }
 
         log.info("开始 Rerank：候选文档 {} 个，取 top{}", documents.size(), topN);
         long startTime = System.currentTimeMillis();
