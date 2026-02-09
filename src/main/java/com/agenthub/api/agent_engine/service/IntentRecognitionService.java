@@ -2,6 +2,8 @@ package com.agenthub.api.agent_engine.service;
 
 import com.agenthub.api.agent_engine.model.IntentResult;
 import com.agenthub.api.agent_engine.model.IntentType;
+import com.agenthub.api.mq.domain.LLMRetryMessage;
+import com.agenthub.api.mq.producer.LLMRetryProducer;
 import com.agenthub.api.prompt.domain.entity.SysPrompt;
 import com.agenthub.api.prompt.service.ISysPromptService;
 import lombok.extern.slf4j.Slf4j;
@@ -33,6 +35,7 @@ public class IntentRecognitionService {
 
     private final ChatClient intentChatClient;
     private final ISysPromptService sysPromptService;
+    private final LLMRetryProducer llmRetryProducer;
 
     /**
      * 提示词代码
@@ -76,9 +79,11 @@ public class IntentRecognitionService {
 
     public IntentRecognitionService(
             @Qualifier("intentChatClient") ChatClient intentChatClient,
-            ISysPromptService sysPromptService) {
+            ISysPromptService sysPromptService,
+            LLMRetryProducer llmRetryProducer) {
         this.intentChatClient = intentChatClient;
         this.sysPromptService = sysPromptService;
+        this.llmRetryProducer = llmRetryProducer;
     }
 
     /**
@@ -211,15 +216,52 @@ public class IntentRecognitionService {
 
         log.debug("[Intent] 使用提示词: {}", systemPromptText.substring(0, Math.min(100, systemPromptText.length())));
 
-        String response = intentChatClient.prompt()
-                .system(systemPromptText)
-                .user(query)
-                .call()
-                .content();
+        try {
+            String response = intentChatClient.prompt()
+                    .system(systemPromptText)
+                    .user(query)
+                    .call()
+                    .content();
 
-        log.debug("[Intent] LLM返回: {}", response);
+            log.debug("[Intent] LLM返回: {}", response);
 
-        return parseIntentResult(response);
+            return parseIntentResult(response);
+        } catch (Exception e) {
+            // 检查是否为限流错误
+            if (isRateLimitError(e)) {
+                log.warn("[Intent] 检测到限流错误，发送重试消息到 MQ: {}", e.getMessage());
+                // 发送重试消息到 MQ（30 秒后重试）
+                LLMRetryMessage retryMessage = LLMRetryMessage.forIntentRecognition(null, null, query);
+                llmRetryProducer.sendRetryMessage(retryMessage, 30_000L);
+                // 返回降级结果
+                return IntentResult.chat(0.3, "请求限流，已加入重试队列");
+            }
+            // 其他错误直接抛出，由上层处理
+            throw e;
+        }
+    }
+
+    /**
+     * 检查是否为限流错误
+     *
+     * @param e 异常
+     * @return 是否为限流错误
+     */
+    private boolean isRateLimitError(Exception e) {
+        if (e == null) {
+            return false;
+        }
+        String message = e.getMessage();
+        if (message == null) {
+            return false;
+        }
+        // 检查常见的限流错误标识
+        return message.contains("rate limit") ||
+                message.contains("Rate limit") ||
+                message.contains("429") ||
+                message.contains("Too Many Requests") ||
+                message.contains("请求过于频繁") ||
+                message.contains("限流");
     }
 
     /**
