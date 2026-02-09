@@ -68,6 +68,10 @@ public class KnowledgeBaseController extends BaseController {
     @Operation(summary = "获取知识库列表")
     @GetMapping("/list")
     public AjaxResult list(KnowledgeBase knowledge, PageQuery pageQuery) {
+        if (knowledge.getTitle() != null && !knowledge.getTitle().isEmpty()) {
+            log.info("搜索知识库: keyword={}", knowledge.getTitle());
+        }
+
         PageResult<KnowledgeBase> page;
 
         if (SecurityUtils.isAdmin()) {
