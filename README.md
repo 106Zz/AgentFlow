@@ -1,10 +1,12 @@
-# 电力知识库管理系统
+# AgentHub - 电力知识库管理系统
 
-基于Spring Boot 3 + Spring AI + PostgreSQL + PGVector的智能电力知识库RAG问答系统
+基于 Spring Boot 3 + Spring AI + PostgreSQL + PGVector 的智能电力知识库 RAG 问答系统，集成多代理架构支持复杂业务场景。
 
 ## 项目简介
 
-本系统是一个专为电力行业设计的智能知识库管理与问答系统，支持PDF、Excel、Word、图片等多种文件格式的上传、解析、向量化存储，并基于RAG（检索增强生成）技术提供智能问答服务。
+本系统是一个专为电力行业设计的智能知识库管理与问答系统，支持 PDF、Excel、Word、图片等多种文件格式的上传、解析、向量化存储，并基于 RAG（检索增强生成）技术提供智能问答服务。
+
+系统采用多代理架构，支持深度思考模式、工具调用和混合检索（向量检索 + BM25），为电力行业提供更精准、更智能的问答体验。
 
 ## 核心功能模块
 
@@ -32,10 +34,21 @@
 ### 4. 智能检索与RAG问答模块
 - ✅ 聊天式问答界面
 - ✅ 基于PGVector的向量检索
+- ✅ 混合检索（向量检索 + BM25 关键词检索）
 - ✅ 结合大语言模型生成准确回答
 - ✅ 答案来源引用和相似度评分
 - ✅ 多轮对话支持
 - ✅ 会话历史管理
+- ✅ 流式响应（SSE）支持打字机效果
+
+### 5. 多代理引擎模块（新增）
+- ✅ Router 代理：意图识别和路由分发
+- ✅ UseCase 代理：业务场景处理
+- ✅ Worker 代理：具体任务执行
+- ✅ 工具调用能力：搜索、计算、审计等
+- ✅ 深度思考模式支持（DeepSeek）
+- ✅ 反思和一致性判断机制
+- ✅ 对话快照和状态冻结
 
 ### 5. 知识展示与辅助功能
 - ✅ 知识列表分页浏览
@@ -47,14 +60,21 @@
 ## 技术栈
 
 ### 后端
-- **框架**: Spring Boot 3.4.12
-- **安全**: Spring Security + JWT
-- **数据库**: PostgreSQL + PGVector
+- **框架**: Spring Boot 3.2.12
+- **Java 版本**: Java 21
+- **安全**: Spring Security + JWT 0.12.6
+- **数据库**: PostgreSQL + PGVector 扩展
 - **ORM**: MyBatis-Plus 3.5.5
-- **AI**: Spring AI + 阿里云DashScope
+- **AI 框架**: Spring AI 1.1.0-M4
+- **大模型**: 阿里云 DashScope（通义千问）
 - **文档解析**: Apache Tika 2.9.1 + PDFBox 3.0.3
-- **工具**: Hutool、Lombok
-- **API文档**: Knife4j (Swagger)
+- **缓存**: Redis + Lettuce 连接池
+- **消息队列**: RabbitMQ
+- **文件存储**: 阿里云 OSS
+- **中文分词**: Jieba-analysis 1.0.2
+- **HTTP 客户端**: Apache HttpClient 5
+- **工具库**: Hutool 5.8.37、Lombok
+- **API 文档**: Knife4j 4.4.0 (Swagger)
 
 ### 前端
 - **框架**: Vue 3.4+ (Composition API)
@@ -94,6 +114,7 @@ com.agenthub
 │   ├── config                      # 配置类
 │   │   ├── CorsConfig.java        # 跨域配置
 │   │   ├── MyBatisPlusConfig.java # MyBatis-Plus配置
+│   │   ├── ThreadPoolConfig.java # 线程池配置
 │   │   └── MyMetaObjectHandler.java # 自动填充配置
 │   └── security                    # 安全模块
 │       ├── config
@@ -123,30 +144,52 @@ com.agenthub
 │           ├── SysUserServiceImpl.java
 │           └── UserDetailsServiceImpl.java # Spring Security用户服务
 │
-└── knowledge                       # 知识库模块
+├── knowledge                       # 知识库模块
+│   ├── controller
+│   │   ├── KnowledgeBaseController.java # 知识库管理控制器
+│   │   └── ChatController.java          # 智能问答控制器
+│   ├── domain
+│   │   ├── KnowledgeBase.java      # 知识库实体
+│   │   ├── ChatHistory.java        # 聊天历史实体
+│   │   ├── ChatSession.java        # 会话管理实体
+│   │   └── vo
+│   │       ├── ChatRequest.java    # 聊天请求VO
+│   │       └── ChatResponse.java   # 聊天响应VO
+│   ├── mapper
+│   │   ├── KnowledgeBaseMapper.java
+│   │   ├── ChatHistoryMapper.java
+│   │   └── ChatSessionMapper.java
+│   └── service
+│       ├── IKnowledgeBaseService.java # 知识库服务接口
+│       └── IChatService.java          # 聊天服务接口
+│
+└── agent_engine                    # 代理引擎模块（新增）
     ├── controller
-    │   ├── KnowledgeBaseController.java # 知识库管理控制器
-    │   └── ChatController.java          # 智能问答控制器
-    ├── domain
-    │   ├── KnowledgeBase.java      # 知识库实体
-    │   ├── ChatHistory.java        # 聊天历史实体
-    │   └── vo
-    │       ├── ChatRequest.java    # 聊天请求VO
-    │       └── ChatResponse.java   # 聊天响应VO
-    ├── mapper
-    │   ├── KnowledgeBaseMapper.java
-    │   └── ChatHistoryMapper.java
-    └── service
-        ├── IKnowledgeBaseService.java # 知识库服务接口
-        └── IChatService.java          # 聊天服务接口
+    │   └── AgentV2Controller.java      # V2 代理控制器
+    ├── core
+    │   ├── ChatAgent.java              # 聊天代理接口
+    │   └── impl
+    │       └── DeepSeekChatAgent.java  # DeepSeek 实现
+    ├── model                          # 数据模型
+    │   ├── AgentRequest.java           # 代理请求
+    │   ├── AgentResponse.java          # 代理响应
+    │   └── ToolCall.java               # 工具调用
+    └── tool                           # 工具实现
+        ├── SearchTool.java             # 搜索工具
+        ├── CalculatorTool.java         # 计算工具
+        └── AuditorTool.java            # 审计工具
 ```
 
 ## 快速开始
 
 ### 1. 环境要求
 - JDK 21+
-- PostgreSQL 14+ (需安装pgvector扩展)
+- PostgreSQL 14+ (需安装 pgvector 扩展)
+- Redis 6+
+- RabbitMQ 3.8+
 - Maven 3.8+
+- 阿里云 OSS（对象存储）
+- 阿里云 DashScope API Key
 
 ### 2. 数据库配置
 
@@ -165,18 +208,72 @@ psql -d agenthub -f src/main/resources/sql/schema.sql
 
 ### 3. 配置文件
 
-修改 `src/main/resources/application.yml`:
+修改 `src/main/resources/application-local.yml`:
 
 ```yaml
 spring:
+  # 数据源配置
   datasource:
     url: jdbc:postgresql://localhost:5432/agenthub
     username: your_username
     password: your_password
-  
-  ai:
-    dashscope:
-      api-key: your_dashscope_api_key
+    driver-class-name: org.postgresql.Driver
+
+  # JPA 配置
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
+
+  # Redis 配置
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      password: your_redis_password
+      lettuce:
+        pool:
+          max-active: 8
+          max-idle: 8
+          min-idle: 0
+
+  # RabbitMQ 配置
+  rabbitmq:
+    host: localhost
+    port: 5672
+    username: guest
+    password: guest
+
+  # 文件上传配置
+  servlet:
+    multipart:
+      max-file-size: 100MB
+      max-request-size: 100MB
+
+# 阿里云 DashScope 配置
+ai:
+  dashscope:
+    api-key: your_dashscope_api_key
+    chat:
+      model: qwen-max
+      temperature: 0.7
+
+# 阿里云 OSS 配置
+aliyun:
+  oss:
+    endpoint: oss-cn-shanghai.aliyuncs.com
+    access-key-id: your_access_key_id
+    access-key-secret: your_access_key_secret
+    bucket-name: your_bucket_name
+
+# 混合检索参数配置
+retrieval:
+  hybrid:
+    vector-weight: 0.7      # 向量检索权重
+    bm25-weight: 0.3        # BM25 检索权重
+    top-k: 5                # 返回结果数量
+    similarity-threshold: 0.7  # 相似度阈值
 ```
 
 ### 4. 启动项目
@@ -309,6 +406,22 @@ Content-Type: application/json
 Response: text/event-stream (逐字返回答案)
 ```
 
+#### V2 代理流式问答（推荐）
+```
+POST /api/v2/agent/chat
+Authorization: Bearer {token}
+Content-Type: application/json
+
+{
+  "sessionId": "session-uuid",
+  "question": "分析一下最近的电力市场趋势",
+  "enableThinking": true,  // 启用深度思考模式
+  "useCase": "analysis"
+}
+
+Response: text/event-stream (支持工具调用和深度思考)
+```
+
 #### 获取会话列表
 ```
 GET /knowledge/chat/sessions
@@ -334,37 +447,57 @@ Authorization: Bearer {token}
 - BaseController: 统一的控制器基类，提供通用响应方法
 - AjaxResult: 统一的响应结果封装
 - 全局异常处理器
-- MyBatis-Plus自动填充配置
+- MyBatis-Plus 自动填充配置
 
 ### 2. Spring Security + JWT
-- 基于JWT的无状态认证
+- 基于 JWT 的无状态认证
 - 角色权限控制（ROLE_admin、ROLE_user）
 - 方法级权限注解（@PreAuthorize）
 - 自定义认证失败处理
 
-### 3. 跨域配置
-- 支持所有域名跨域访问（已配置CorsConfig）
-- 允许携带Cookie和Authorization头
-- 支持所有HTTP方法（GET/POST/PUT/DELETE）
-- 前端开发环境可使用Vite代理
+### 3. 混合检索（向量 + BM25）
+- 向量检索：基于 PGVector 的语义相似度检索
+- BM25 检索：基于关键词的精确匹配
+- 可配置的权重比例（默认 0.7 + 0.3）
+- 提高检索准确率和召回率
 
-### 4. 数据隔离
+### 4. 多代理架构
+- **Router 代理**：负责意图识别和任务路由
+- **UseCase 代理**：处理特定业务场景
+- **Worker 代理**：执行具体任务
+- **工具调用**：集成搜索、计算、审计等工具
+- **深度思考**：支持 DeepSeek 深度思考模式
+- **反思机制**：自动检查和优化回答质量
+
+### 5. 跨域配置
+- 支持所有域名跨域访问（已配置 CorsConfig）
+- 允许携带 Cookie 和 Authorization 头
+- 支持所有 HTTP 方法（GET/POST/PUT/DELETE）
+- 前端开发环境可使用 Vite 代理
+
+### 6. 数据隔离
 - 管理员可查看所有知识库
 - 普通用户只能查看公开知识库和自己上传的知识库
-- 基于userId的数据过滤
+- 基于 userId 的数据过滤
 
-### 5. RAG问答
-- 向量检索相关知识片段（基于PGVector）
-- 结合大语言模型生成回答（阿里云DashScope）
+### 7. RAG 问答
+- 向量检索相关知识片段（基于 PGVector）
+- 结合大语言模型生成回答（阿里云 DashScope）
 - 返回知识来源和相似度评分
 - 支持多轮对话和会话管理
 - 支持流式响应（SSE）和普通响应
 
-### 6. OSS直传
-- 前端直接上传文件到阿里云OSS
+### 8. OSS 直传
+- 前端直接上传文件到阿里云 OSS
 - 不占用服务器带宽
 - 支持上传进度显示
 - 后端只负责生成临时凭证和创建记录
+
+### 9. 异步处理优化
+- 文件处理线程池
+- 向量化处理线程池
+- 任务执行线程池
+- 提高系统并发能力
 
 ## 前端开发
 
@@ -451,10 +584,106 @@ VITE_APP_TITLE=电力知识库管理系统
 5. 使用Lombok简化代码
 6. 遵循RESTful API设计规范
 
+## 部署
+
+### Docker 部署
+
+使用 `docker-compose.yml` 进行快速部署：
+
+```bash
+# 构建并启动所有服务
+docker-compose up -d
+
+# 查看日志
+docker-compose logs -f
+
+# 停止服务
+docker-compose down
+```
+
+### 环境变量
+
+生产环境需要配置以下环境变量：
+
+```bash
+# 数据库
+SPRING_DATASOURCE_URL=jdbc:postgresql://your-host:5432/agenthub
+SPRING_DATASOURCE_USERNAME=your_username
+SPRING_DATASOURCE_PASSWORD=your_password
+
+# Redis
+SPRING_DATA_REDIS_HOST=your-redis-host
+SPRING_DATA_REDIS_PORT=6379
+SPRING_DATA_REDIS_PASSWORD=your_redis_password
+
+# RabbitMQ
+SPRING_RABBITMQ_HOST=your-rabbitmq-host
+SPRING_RABBITMQ_PORT=5672
+SPRING_RABBITMQ_USERNAME=your_username
+SPRING_RABBITMQ_PASSWORD=your_password
+
+# 阿里云 OSS
+ALIYUN_OSS_ENDPOINT=oss-cn-shanghai.aliyuncs.com
+ALIYUN_OSS_ACCESSKEYID=your_access_key_id
+ALIYUN_OSS_ACCESSKEYSECRET=your_access_key_secret
+ALIYUN_OSS_BUCKETNAME=your_bucket_name
+
+# 阿里云 DashScope
+AI_DASHSCOPE_API_KEY=your_dashscope_api_key
+```
+
+## 系统架构图
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                         前端 (Vue 3)                         │
+│                    Element Plus + TypeScript                  │
+└──────────────────────────────┬───────────────────────────────┘
+                               │ HTTPS/JWT
+                               ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    Spring Boot 3.2.12                        │
+├─────────────┬─────────────┬─────────────┬────────────────────┤
+│   认证模块   │  知识库模块  │   聊天模块   │    代理引擎模块     │
+│  Security   │  Knowledge  │    Chat     │   Agent Engine     │
+└──────┬──────┴──────┬──────┴──────┬──────┴────────┬───────────┘
+       │             │             │               │
+       ▼             ▼             ▼               ▼
+┌─────────────┐ ┌─────────┐ ┌──────────┐ ┌─────────────────┐
+│ PostgreSQL  │ │  Redis  │ │ RabbitMQ │ │   DashScope     │
+│  + PGVector │ │         │ │          │ │   (通义千问)     │
+└─────────────┘ └─────────┘ └──────────┘ └─────────────────┘
+       │
+       ▼
+┌─────────────┐
+│   阿里云    │
+│     OSS     │
+└─────────────┘
+```
+
+## 项目文档
+
+- **数据隔离方案**: `docs/DATA_ISOLATION.md`
+- **OSS 直传方案**: `docs/OSS_DIRECT_UPLOAD.md`
+- **前端开发规范**: `.kiro/specs/frontend-development/`
+- **AI 助手开发指南**: `AGENTS.md`
+- **Gemini 集成文档**: `GEMINI.md`
+
+## 开发规范
+
+1. 所有实体类继承 BaseEntity
+2. 所有控制器继承 BaseController
+3. 使用统一的 AjaxResult 返回结果
+4. 使用 @PreAuthorize 进行权限控制
+5. 使用 Lombok 简化代码
+6. 遵循 RESTful API 设计规范
+7. 工具类方法使用静态方法
+8. 异常统一使用 ServiceException
+
 ## 许可证
 
 MIT License
 
 ## 联系方式
 
-如有问题，请提交Issue或联系开发团队。
+如有问题，请提交 Issue 或联系开发团队。
