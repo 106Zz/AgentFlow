@@ -17,9 +17,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.net.URL;
-import java.util.Date;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.stream.Collectors;
 
 
@@ -34,6 +32,8 @@ public class PowerKnowledgeService {
         private final OSS ossClient;
         private final EvidenceAssembly evidenceAssembly;  // 新增：证据组装器
         private final com.agenthub.api.knowledge.mapper.KnowledgeBaseMapper knowledgeBaseMapper;  // 用于查询正确的 OSS 路径
+        private final QueryRewriteService queryRewriteService;  // 查询改写服务
+        private final RAGCacheService ragCacheService;  // RAG 缓存服务
 
         @Value("${aliyun.oss.bucketName:agenthub-knowledge}")
         private String bucketName;
@@ -43,6 +43,9 @@ public class PowerKnowledgeService {
 
         @Value("${knowledge.retrieval.top-k:5}")
         private int defaultTopK;
+
+        @Value("${knowledge.retrieval.enable-cache:true}")
+        private boolean enableCache;
 
 
         public PowerKnowledgeResult retrieve(PowerKnowledgeQuery query){
@@ -54,22 +57,35 @@ public class PowerKnowledgeService {
                 Long userId = SecurityUtils.getUserId();
                 boolean isAdmin = SecurityUtils.isAdmin();
 
-                log.info("【知识检索】查询: {}, topK: {}, 混合检索: {}",
-                        userQuery, userTopK, enableHybridSearch);
+                log.info("【知识检索】查询: {}, topK: {}, 混合检索: {}, 缓存: {}",
+                        userQuery, userTopK, enableHybridSearch, enableCache);
 
-                // 2. 向量召回 (Recall) - 故意多查一点，比如 50 条
-                // 2. 召回阶段（Vector + BM25）
+                // 2. 尝试从缓存获取
+                if (enableCache) {
+                        PowerKnowledgeResult cachedResult = ragCacheService.get(userQuery, userId, null, userTopK);
+                        if (cachedResult != null) {
+                                log.info("【知识检索】缓存命中，直接返回: query={}", userQuery);
+                                return cachedResult;
+                        }
+                }
+
+                // 3. 查询改写（Query Rewrite）
+                List<String> rewrittenQueries = queryRewriteService.rewrite(userQuery);
+                log.info("【查询改写】改写后查询数量: {}, queries: {}", rewrittenQueries.size(), rewrittenQueries);
+
+                // 4. 向量召回 (Recall) - 故意多查一点，比如 50 条
+                // 4. 召回阶段（Vector + BM25）- 支持多查询召回
                 List<Document> rawDocs;
                 if (enableHybridSearch) {
-                        rawDocs = hybridRecall(userQuery, userId, isAdmin, userTopK);
+                        rawDocs = multiQueryHybridRecall(rewrittenQueries, userId, isAdmin, userTopK);
                 } else {
-                        rawDocs = vectorRecall(userQuery, userId, isAdmin, userTopK);
+                        rawDocs = multiQueryVectorRecall(rewrittenQueries, userId, isAdmin, userTopK);
                 }
 
                 log.info("【知识检索】召回完成，共 {} 条候选", rawDocs.size());
 
 
-                // 3. 重排阶段（Reranker）
+                // 4. 重排阶段（Reranker）
                 List<Document> finalDocs = dashScopeReranker.rerank(
                         userQuery,
                         rawDocs,
@@ -78,11 +94,18 @@ public class PowerKnowledgeService {
 
                 log.info("【知识检索】重排完成，保留 {} 条", finalDocs.size());
 
-                // 4. 组装结果
+                // 5. 组装结果
                 long elapsed = System.currentTimeMillis() - startTime;
                 log.info("【知识检索】完成，总耗时: {}ms", elapsed);
 
-                return buildResult(finalDocs, userQuery, elapsed);
+                PowerKnowledgeResult result = buildResult(finalDocs, userQuery, elapsed);
+
+                // 6. 存入缓存
+                if (enableCache) {
+                        ragCacheService.put(userQuery, userId, null, userTopK, result);
+                }
+
+                return result;
 
         }
 
@@ -121,6 +144,182 @@ public class PowerKnowledgeService {
                 return results.stream()
                         .map(this::toDocument)
                         .collect(Collectors.toList());
+        }
+
+
+        /**
+         * 多查询混合召回（Query Rewrite 后的合并召回）
+         * <p>
+         * 对每个改写后的查询分别进行检索，然后合并结果
+         * 使用 Map 去重，保留分数最高的文档
+         * </p>
+         */
+        private List<Document> multiQueryHybridRecall(
+                List<String> queries,
+                Long userId,
+                boolean isAdmin,
+                int topK) {
+
+                log.info("【多查询混合召回】开始，查询数量: {}", queries.size());
+
+                // 使用 Map 进行去重，key 是 doc id，value 是 document 和最高分数
+                Map<String, DocumentWrapper> docMap = new HashMap<>();
+
+                // 对每个查询分别进行检索
+                for (String query : queries) {
+                        try {
+                                List<Document> docs = singleQueryHybridRecall(query, userId, isAdmin, topK);
+
+                                for (Document doc : docs) {
+                                        String docId = doc.getId();
+                                        double score = getDocumentScore(doc);
+
+                                        // 如果文档已存在，保留分数更高的
+                                        DocumentWrapper existing = docMap.get(docId);
+                                        if (existing == null || score > existing.score) {
+                                                docMap.put(docId, new DocumentWrapper(doc, score));
+                                        }
+                                }
+                        } catch (Exception e) {
+                                log.warn("【多查询混合召回】单个查询失败: {}, 错误: {}", query, e.getMessage());
+                        }
+                }
+
+                // 按分数排序，取 Top K
+                List<Document> result = docMap.values().stream()
+                        .sorted((a, b) -> Double.compare(b.score, a.score))
+                        .limit(topK * 3)  // 多召回一些，供 Reranker 精排
+                        .map(w -> w.document)
+                        .collect(Collectors.toList());
+
+                log.info("【多查询混合召回】完成，去重后文档数: {}", result.size());
+                return result;
+        }
+
+        /**
+         * 单查询混合召回（内部方法）
+         */
+        private List<Document> singleQueryHybridRecall(
+                String query,
+                Long userId,
+                boolean isAdmin,
+                int topK) {
+
+                // 构建混合检索请求
+                HybridSearchRequest request = new HybridSearchRequest();
+                request.setQuery(query);
+                request.setTopK(topK);
+                request.setUserId(userId);
+                request.setIsAdmin(isAdmin);
+
+                // 每个查询召回较少的结果，因为会合并多个查询的结果
+                int recallCount = Math.max(10, topK);
+                request.setVectorTopK(recallCount);
+                request.setBm25TopK(recallCount);
+
+                // 使用 RRF 融合
+                request.setFusionStrategy(HybridSearchRequest.FusionStrategy.RRF);
+                request.setRrfK(60);
+
+                List<HybridSearchResult> results = hybridSearchService.hybridSearch(request);
+
+                return results.stream()
+                        .map(this::toDocument)
+                        .collect(Collectors.toList());
+        }
+
+        /**
+         * 多查询向量召回（Query Rewrite 后的合并召回）
+         */
+        private List<Document> multiQueryVectorRecall(
+                List<String> queries,
+                Long userId,
+                boolean isAdmin,
+                int topK) {
+
+                log.info("【多查询向量召回】开始，查询数量: {}", queries.size());
+
+                Map<String, DocumentWrapper> docMap = new HashMap<>();
+
+                for (String query : queries) {
+                        try {
+                                List<Document> docs = singleQueryVectorRecall(query, userId, isAdmin, topK);
+
+                                for (Document doc : docs) {
+                                        String docId = doc.getId();
+                                        double score = getDocumentScore(doc);
+
+                                        DocumentWrapper existing = docMap.get(docId);
+                                        if (existing == null || score > existing.score) {
+                                                docMap.put(docId, new DocumentWrapper(doc, score));
+                                        }
+                                }
+                        } catch (Exception e) {
+                                log.warn("【多查询向量召回】单个查询失败: {}, 错误: {}", query, e.getMessage());
+                        }
+                }
+
+                List<Document> result = docMap.values().stream()
+                        .sorted((a, b) -> Double.compare(b.score, a.score))
+                        .limit(topK * 3)
+                        .map(w -> w.document)
+                        .collect(Collectors.toList());
+
+                log.info("【多查询向量召回】完成，去重后文档数: {}", result.size());
+                return result;
+        }
+
+        /**
+         * 单查询向量召回（内部方法）
+         */
+        private List<Document> singleQueryVectorRecall(
+                String query,
+                Long userId,
+                boolean isAdmin,
+                int topK) {
+
+                int recallCount = Math.max(10, topK);
+
+                return vectorStoreHelper.searchWithUserFilter(
+                        query,
+                        userId,
+                        isAdmin,
+                        recallCount,
+                        0.45,
+                        null
+                );
+        }
+
+        /**
+         * 从 document 的 metadata 中获取分数
+         */
+        private double getDocumentScore(Document doc) {
+                // 优先使用 hybrid_score
+                Object hybridScore = doc.getMetadata().get("hybrid_score");
+                if (hybridScore != null) {
+                        return ((Number) hybridScore).doubleValue();
+                }
+
+                // 其次使用 vector_score
+                Object vectorScore = doc.getMetadata().get("vector_score");
+                if (vectorScore != null) {
+                        return ((Number) vectorScore).doubleValue();
+                }
+
+                return 0.0;
+        }
+
+        /**
+         * 文档包装类，用于保存文档和分数
+         */
+        private static class DocumentWrapper {
+                Document document;
+                double score;
+
+                DocumentWrapper(Document document, double score) {
+                        this.document = document;
+                        this.score = score;
+                }
         }
 
 
