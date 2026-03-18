@@ -119,6 +119,81 @@ public class GSSCService {
     }
 
     /**
+     * 对历史消息进行评分选择
+     * <p>
+     * 使用 GSSC 的评分逻辑，基于相关性、时效性、重要性选择最相关的历史消息
+     * </p>
+     *
+     * @param historyPackets 历史消息包列表
+     * @param userQuery      当前用户问题（用于计算相关性）
+     * @return 评分选择后的历史消息包列表
+     */
+    public List<ContextPacket> selectHistoryMessages(List<ContextPacket> historyPackets, String userQuery) {
+        if (historyPackets == null || historyPackets.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        if (!enabled) {
+            // 如果未启用评分，返回原始列表（但仍需限制数量）
+            int maxItems = Math.min(historyPackets.size(), historyCount);
+            return historyPackets.subList(0, maxItems);
+        }
+
+        log.debug("【GSSC Memory】历史消息评分选择: input={}, userQuery={}", 
+                historyPackets.size(), userQuery);
+
+        // 为每个历史消息计算与当前问题的相关性
+        for (ContextPacket packet : historyPackets) {
+            double relevanceScore = calculateRelevanceScore(packet.getContent(), userQuery);
+            packet.setRelevanceScore(relevanceScore);
+        }
+
+        // 使用现有的选择逻辑
+        List<ContextPacket> selected = selectHistory(historyPackets);
+
+        log.debug("【GSSC Memory】历史消息评分选择完成: output={}", selected.size());
+        return selected;
+    }
+
+    /**
+     * 计算历史消息与当前问题的相关性分数
+     * <p>
+     * 使用简单的关键词匹配策略：
+     * 1. 提取问题中的关键词
+     * 2. 统计历史消息中关键词出现的次数
+     * 3. 归一化到 0-1 范围
+     * </p>
+     */
+    private double calculateRelevanceScore(String historyContent, String userQuery) {
+        if (historyContent == null || historyContent.isEmpty() || userQuery == null || userQuery.isEmpty()) {
+            return 0.5;
+        }
+
+        // 简单分词（按空格和标点分割）
+        String[] queryWords = userQuery.toLowerCase()
+                .split("[\\s,，。.!?;:：；、]+");
+        
+        if (queryWords.length == 0) {
+            return 0.5;
+        }
+
+        String historyLower = historyContent.toLowerCase();
+        int matchCount = 0;
+        
+        for (String word : queryWords) {
+            if (word.length() >= 2 && historyLower.contains(word)) {
+                matchCount++;
+            }
+        }
+
+        // 归一化分数：匹配词数 / 总词数
+        double rawScore = (double) matchCount / queryWords.length;
+        
+        // 转换为 0.3-1.0 范围（避免完全无关的消息分数为0）
+        return 0.3 + rawScore * 0.7;
+    }
+
+    /**
      * 只处理 RAG 结果的 GSSC（用于简单场景）
      */
     public String processEvidence(List<ContextPacket> evidencePackets, String userQuery) {

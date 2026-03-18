@@ -9,6 +9,7 @@ import com.agenthub.api.agent_engine.service.ReflectionService;
 import com.agenthub.api.agent_engine.tool.AgentTool;
 import com.agenthub.api.ai.domain.llm.StreamCallback;
 import com.agenthub.api.ai.service.PowerKnowledgeService;
+import com.agenthub.api.ai.service.LLMCacheService;
 import com.agenthub.api.ai.service.gssc.ContextPacket;
 import com.agenthub.api.ai.service.gssc.GSSCService;
 import com.agenthub.api.prompt.builder.CaseSnapshotBuilder;
@@ -94,6 +95,7 @@ public class SinglePassExecutor {
     private final ObjectMapper objectMapper;
     private final DashScopeNativeService nativeService;
     private final GSSCService gscService;  // GSSC 服务
+    private final LLMCacheService llmCacheService;  // LLM 回答缓存
 
     // ==================== 线程池 ====================
 
@@ -134,6 +136,7 @@ public class SinglePassExecutor {
             ObjectMapper objectMapper,
             DashScopeNativeService nativeService,
             GSSCService gscService,
+            LLMCacheService llmCacheService,
             Executor judgeExecutor,
             Executor agentWorkerExecutor) {
         this.workerClient = workerClient;
@@ -147,6 +150,7 @@ public class SinglePassExecutor {
         this.objectMapper = objectMapper;
         this.nativeService = nativeService;
         this.gscService = gscService;
+        this.llmCacheService = llmCacheService;
         this.judgeExecutor = judgeExecutor;
         this.agentWorkerExecutor = agentWorkerExecutor;
     }
@@ -284,8 +288,8 @@ public class SinglePassExecutor {
         String systemPrompt = buildSystemPrompt(context);
         messages.add(new SystemMessage(systemPrompt));
 
-        // 2. 加载历史记录 (带滑动窗口)
-        List<Message> history = loadRecentHistory(context.getSessionId());
+        // 2. 加载历史记录 (带 GSSC 评分选择)
+        List<Message> history = loadRecentHistory(context.getSessionId(), context.getQuery());
         if (!history.isEmpty()) {
             messages.addAll(history);
             log.debug("[SinglePass] 加载历史记录: 数量={}", history.size());
@@ -311,8 +315,8 @@ public class SinglePassExecutor {
         // 1. System Prompt
         String systemPrompt = buildSystemPrompt(context);
 
-        // 2. 加载历史记录
-        List<Message> history = loadRecentHistory(context.getSessionId());
+        // 2. 加载历史记录 (带 GSSC 评分选择)
+        List<Message> history = loadRecentHistory(context.getSessionId(), context.getQuery());
 
         // 3. 构建 ContextPacket 列表
         List<ContextPacket> evidencePackets = buildEvidencePackets(evidenceContext);
@@ -476,11 +480,15 @@ public class SinglePassExecutor {
 
     /**
      * 加载最近的历史消息
-     * <p>从 ChatMemoryRepository 加载，并进行滑动窗口控制</p>
+     * <p>从 ChatMemoryRepository 加载，并进行 GSSC 评分选择</p>
      * <p>注意：会过滤掉历史消息中的 @@THINK_START@@ 和 @@THINK_END@@ 标签，
      * 防止模型在后续回答中模仿这些内部标记</p>
+     *
+     * @param sessionId 会话ID
+     * @param userQuery  当前用户问题（用于计算历史消息相关性）
+     * @return 评分选择后的历史消息列表
      */
-    private List<Message> loadRecentHistory(String sessionId) {
+    private List<Message> loadRecentHistory(String sessionId, String userQuery) {
         try {
             List<Message> allHistory = chatMemoryRepository.findByConversationId(sessionId);
             if (allHistory == null || allHistory.isEmpty()) {
@@ -507,14 +515,59 @@ public class SinglePassExecutor {
                 }
             }
 
-            // 滑动窗口控制 (保留最近 MEMORY_WINDOW_SIZE 条)
-            if (filteredHistory.size() > MEMORY_WINDOW_SIZE) {
-                log.debug("[SinglePass] 历史记录超过窗口大小: {} -> {} (保留最近{}条)",
-                        filteredHistory.size(), MEMORY_WINDOW_SIZE, MEMORY_WINDOW_SIZE);
-                return filteredHistory.subList(filteredHistory.size() - MEMORY_WINDOW_SIZE, filteredHistory.size());
+            // 如果历史记录很少，直接返回
+            if (filteredHistory.size() <= MEMORY_WINDOW_SIZE) {
+                return filteredHistory;
             }
 
-            return filteredHistory;
+            // GSSC 评分选择
+            if (gscService.isEnabled()) {
+                log.debug("[SinglePass] 使用 GSSC 评分选择历史消息: total={}, userQuery={}", 
+                        filteredHistory.size(), userQuery);
+
+                // 构建历史 ContextPacket 列表
+                List<ContextPacket> historyPackets = new ArrayList<>();
+                for (Message msg : filteredHistory) {
+                    String content = msg.getText();
+                    if (!StringUtils.hasText(content)) {
+                        continue;
+                    }
+
+                    ContextPacket.ContextType type = msg instanceof UserMessage 
+                            ? ContextPacket.ContextType.QUERY 
+                            : ContextPacket.ContextType.HISTORY;
+
+                    historyPackets.add(ContextPacket.builder()
+                            .type(type)
+                            .content(content)
+                            .timestamp(Instant.now().minusSeconds(historyPackets.size() * 60))
+                            .tokenCount(GSSCService.estimateTokens(content))
+                            .relevanceScore(0.5)  // 默认分数，会在 selectHistoryMessages 中更新
+                            .build());
+                }
+
+                // 使用 GSSC 评分选择
+                List<ContextPacket> selectedPackets = gscService.selectHistoryMessages(historyPackets, userQuery);
+
+                // 将选中的 ContextPacket 转换回 Message 列表
+                List<Message> selectedMessages = new ArrayList<>();
+                for (ContextPacket packet : selectedPackets) {
+                    if (packet.getType() == ContextPacket.ContextType.QUERY) {
+                        selectedMessages.add(new UserMessage(packet.getContent()));
+                    } else {
+                        selectedMessages.add(new AssistantMessage(packet.getContent()));
+                    }
+                }
+
+                log.debug("[SinglePass] GSSC 历史消息选择完成: {} -> {}", 
+                        filteredHistory.size(), selectedMessages.size());
+                return selectedMessages;
+            } else {
+                // 原有滑动窗口逻辑
+                log.debug("[SinglePass] 滑动窗口控制历史消息: {} -> {}", 
+                        filteredHistory.size(), MEMORY_WINDOW_SIZE);
+                return filteredHistory.subList(filteredHistory.size() - MEMORY_WINDOW_SIZE, filteredHistory.size());
+            }
 
         } catch (Exception e) {
             log.error("[SinglePass] 加载历史记录失败: sessionId={}", sessionId, e);

@@ -88,4 +88,14 @@ public record PowerKnowledgeResult(
     public int getEvidenceBlockCount() {
         return evidenceBlocks != null ? evidenceBlocks.size() : 0;
     }
+
+    /**
+     * 是否有有效内容（用于缓存判断）
+     */
+    public boolean hasContent() {
+        // 有答案或有证据块或有原始片段
+        return (answer != null && !answer.isEmpty())
+                || hasEvidenceBlocks()
+                || (rawContentSnippets != null && !rawContentSnippets.isEmpty());
+    }
 }
