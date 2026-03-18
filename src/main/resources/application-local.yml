@@ -111,6 +111,18 @@ app:
       enabled: true
       paths:
         - "classpath:docs/company-rules/*.pdf"
+  # LLM 回答缓存配置
+  llm:
+    cache:
+      enabled: true
+      ttl-seconds: 1800          # 30分钟
+      ttl-random-offset: 300     # ±5分钟，防止雪崩
+      max-size: 10000           # 最大缓存数量（用于监控）
+  # RAG 检索缓存配置
+  rag-cache:
+    enabled: true
+    ttl-seconds: 3600           # 1小时
+    ttl-random-offset: 300     # ±5分钟，防止雪崩
 
 aliyun:
   oss:
