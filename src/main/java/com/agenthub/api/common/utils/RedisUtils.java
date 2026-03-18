@@ -1,19 +1,19 @@
 package com.agenthub.api.common.utils;
 
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Component;
 
-import java.util.Collection;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.TimeUnit;
 
 /**
  * Redis 工具类
  * 封装常用的 Redis 操作
  */
+@Slf4j
 @Component
 @RequiredArgsConstructor
 public class RedisUtils {
@@ -530,5 +530,71 @@ public class RedisUtils {
             e.printStackTrace();
             return 0;
         }
+    }
+
+    // ========== 分布式锁操作 ==========
+
+    /**
+     * 尝试获取分布式锁
+     *
+     * @param lockKey    锁key
+     * @param requestId  请求唯一标识（建议使用UUID）
+     * @param expireTime 过期时间（秒）
+     * @return true-获取成功, false-获取失败
+     */
+    public boolean tryLock(String lockKey, String requestId, long expireTime) {
+        try {
+            Boolean result = redisTemplate.opsForValue()
+                    .setIfAbsent(lockKey, requestId, expireTime, TimeUnit.SECONDS);
+            return Boolean.TRUE.equals(result);
+        } catch (Exception e) {
+            log.error("获取分布式锁失败: key={}", lockKey, e);
+            return false;
+        }
+    }
+
+    /**
+     * 释放分布式锁
+     * 使用Lua脚本确保原子性释放（只能释放自己的锁）
+     *
+     * @param lockKey    锁key
+     * @param requestId  请求唯一标识
+     * @return true-释放成功, false-释放失败
+     */
+    public boolean unlock(String lockKey, String requestId) {
+        try {
+            String luaScript = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end";
+            DefaultRedisScript<Long> script = new DefaultRedisScript<>(luaScript, Long.class);
+            Long result = redisTemplate.execute(script, Collections.singletonList(lockKey), requestId);
+            return result != null && result > 0;
+        } catch (Exception e) {
+            log.error("释放分布式锁失败: key={}", lockKey, e);
+            return false;
+        }
+    }
+
+    /**
+     * 等待获取锁（带重试）
+     *
+     * @param lockKey     锁key
+     * @param requestId   请求唯一标识
+     * @param expireTime  过期时间（秒）
+     * @param maxRetries  最大重试次数
+     * @param retryDelay  重试间隔（毫秒）
+     * @return true-获取成功, false-重试次数用尽
+     */
+    public boolean waitForLock(String lockKey, String requestId, long expireTime, int maxRetries, long retryDelay) {
+        for (int i = 0; i < maxRetries; i++) {
+            if (tryLock(lockKey, requestId, expireTime)) {
+                return true;
+            }
+            try {
+                Thread.sleep(retryDelay);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+        return false;
     }
 }

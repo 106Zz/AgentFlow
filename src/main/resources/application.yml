@@ -88,7 +88,15 @@ logging:
 knowledge:
   retrieval:
     top-k: 5                      # 默认返回数量
-    enable-hybrid: true          # 是否启用混合检索（默认关闭）
+    enable-hybrid: true          # 是否启用混合检索
+    enable-cache: true           # 是否启用 RAG 结果缓存
+
+# 查询改写配置
+query:
+  rewrite:
+    enabled: true               # 是否启用查询改写（默认关闭，建议先测试再开启）
+    count: 3                     # 改写生成的查询数量
+    timeout: 10000               # 改写超时时间（毫秒）
 
 # 混合检索配置
 hybrid-search:
@@ -105,6 +113,22 @@ hybrid-search:
   bm25:
     k1: 1.5                      # 词频饱和参数
     b: 0.75                      # 长度惩罚参数
+
+# GSSC 流水线配置
+gssc:
+  enabled: true                 # 是否启用 GSSC（默认关闭，建议测试后再开启）
+  max-tokens: 3000              # 最大 Token 预算
+
+  # 评分权重配置
+  weights:
+    relevance: 0.6               # 相关性权重
+    recency: 0.3                # 时效性权重
+    importance: 0.1             # 重要性权重
+
+  # 选择数量配置
+  select:
+    evidence-count: 5            # RAG 证据选择数量
+    history-count: 3             # 历史记忆选择数量
 
 # Case 快照冻结配置
 case:
