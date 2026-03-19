@@ -1,5 +1,7 @@
 package com.agenthub.api.ai.service.gssc;
 
+import com.agenthub.api.search.util.ChineseTokenizer;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -25,7 +27,10 @@ import java.util.stream.Collectors;
  */
 @Slf4j
 @Service
+@RequiredArgsConstructor
 public class GSSCService {
+
+    private final ChineseTokenizer chineseTokenizer;
 
     /**
      * 最大 Token 预算
@@ -158,39 +163,70 @@ public class GSSCService {
     /**
      * 计算历史消息与当前问题的相关性分数
      * <p>
-     * 使用简单的关键词匹配策略：
-     * 1. 提取问题中的关键词
-     * 2. 统计历史消息中关键词出现的次数
-     * 3. 归一化到 0-1 范围
+     * 改进版（v2）：
+     * 1. 使用 Jieba 中文分词（复用 ChineseTokenizer），替代标点分割
+     * 2. 过滤停用词，只保留有意义的词
+     * 3. 使用 Jaccard 相似系数衡量词集合重叠度
+     * 4. bigram 短语级匹配加分，捕捉"电力市场交易"这类短语
      * </p>
+     *
+     * @param historyContent 历史消息内容
+     * @param userQuery      当前用户问题
+     * @return 相关性分数，范围 0.3 ~ 1.0
      */
     private double calculateRelevanceScore(String historyContent, String userQuery) {
         if (historyContent == null || historyContent.isEmpty() || userQuery == null || userQuery.isEmpty()) {
             return 0.5;
         }
 
-        // 简单分词（按空格和标点分割）
-        String[] queryWords = userQuery.toLowerCase()
-                .split("[\\s,，。.!?;:：；、]+");
-        
-        if (queryWords.length == 0) {
+        // 步骤1：用 Jieba 中文分词（自动过滤停用词和单字）
+        List<String> queryTokens = chineseTokenizer.tokenize(userQuery);
+        List<String> historyTokens = chineseTokenizer.tokenize(historyContent);
+
+        if (queryTokens.isEmpty()) {
             return 0.5;
         }
 
-        String historyLower = historyContent.toLowerCase();
-        int matchCount = 0;
-        
-        for (String word : queryWords) {
-            if (word.length() >= 2 && historyLower.contains(word)) {
-                matchCount++;
-            }
+        // 步骤2：构建集合，计算 Jaccard 相似系数
+        Set<String> querySet = new LinkedHashSet<>(queryTokens);
+        Set<String> historySet = new LinkedHashSet<>(historyTokens);
+
+        // 交集：query 和 history 中都出现的词
+        long intersectionCount = querySet.stream().filter(historySet::contains).count();
+        // 并集
+        Set<String> union = new LinkedHashSet<>(querySet);
+        union.addAll(historySet);
+
+        double jaccard = union.isEmpty() ? 0.0 : (double) intersectionCount / union.size();
+
+        // 步骤3：bigram 短语级匹配加分
+        // "电力市场交易" 分词后 ["电力","市场","交易"]
+        // bigram: ["电力市场", "市场交易"]
+        // 如果 history 中也有 "电力市场" 这个 bigram，说明短语级语义匹配
+        double bigramBonus = 0.0;
+        List<String> queryBigrams = generateBigrams(queryTokens);
+        if (!queryBigrams.isEmpty()) {
+            List<String> historyBigrams = generateBigrams(historyTokens);
+            Set<String> historyBigramSet = new LinkedHashSet<>(historyBigrams);
+            long bigramHits = queryBigrams.stream().filter(historyBigramSet::contains).count();
+            bigramBonus = (double) bigramHits / queryBigrams.size() * 0.15; // 最多加 0.15
         }
 
-        // 归一化分数：匹配词数 / 总词数
-        double rawScore = (double) matchCount / queryWords.length;
-        
-        // 转换为 0.3-1.0 范围（避免完全无关的消息分数为0）
-        return 0.3 + rawScore * 0.7;
+        // 步骤4：合并，映射到 0.3 ~ 1.0
+        double rawScore = jaccard + bigramBonus;
+        return 0.3 + Math.min(rawScore, 1.0) * 0.7;
+    }
+
+    /**
+     * 从 token 列表生成 bigram（二元组）
+     * e.g. ["电力","市场","交易"] → ["电力市场","市场交易"]
+     */
+    private List<String> generateBigrams(List<String> tokens) {
+        List<String> bigrams = new ArrayList<>();
+        for (int i = 0; i < tokens.size() - 1; i++) {
+            bigrams.add(tokens.get(i) + tokens.get(i + 1));
+        }
+        return bigrams;
     }
 
     /**
