@@ -1,0 +1,134 @@
+# 本地开发环境配置模板
+# 复制此文件为 application-local.yml 并填入真实值
+# 注意：application-local.yml 已添加到 .gitignore，不会被提交
+
+spring:
+  application:
+    name: agenthub
+  
+  # 排除不需要的自动配置
+  autoconfigure:
+    exclude:
+      - com.alibaba.cloud.ai.autoconfigure.dashscope.DashScopeAudioSpeechAutoConfiguration
+      - com.alibaba.cloud.ai.autoconfigure.dashscope.DashScopeAudioTranscriptionAutoConfiguration
+  
+  main:
+    allow-circular-references: true
+
+  # 数据源配置（请填入真实值）
+  datasource:
+    url: jdbc:postgresql://YOUR_DB_HOST:5432/YOUR_DB_NAME
+    username: YOUR_DB_USERNAME
+    password: YOUR_DB_PASSWORD
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      minimum-idle: 5
+      maximum-pool-size: 20
+      connection-timeout: 30000
+      idle-timeout: 300000
+      max-lifetime: 900000
+      keepalive-time: 60000
+      connection-test-query: SELECT 1
+      pool-name: AgentHubHikariPool
+
+  # JPA 配置
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+
+  # 文件上传
+  servlet:
+    multipart:
+      max-file-size: 100MB
+      max-request-size: 100MB
+      enabled: true
+
+  # Redis 配置（请填入真实值）
+  data:
+    redis:
+      host: YOUR_REDIS_HOST
+      port: 6379
+      password: YOUR_REDIS_PASSWORD
+      database: 0
+      timeout: 10000ms
+      client-type: lettuce
+      lettuce:
+        pool:
+          max-active: 20
+          max-idle: 10
+          min-idle: 5
+          max-wait: 2000ms
+
+  # RabbitMQ 配置（请填入真实值）
+  rabbitmq:
+    host: YOUR_RABBITMQ_HOST
+    port: 5672
+    username: YOUR_RABBITMQ_USERNAME
+    password: YOUR_RABBITMQ_PASSWORD
+    virtual-host: /agenthub
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    listener:
+      simple:
+        acknowledge-mode: manual
+        prefetch: 1
+
+  # Spring AI DashScope 配置（请填入真实值）
+  ai:
+    dashscope:
+      api-key: YOUR_DASHSCOPE_API_KEY
+      connection-timeout: 10000
+      read-timeout: 60000
+      chat:
+        options:
+          model: deepseek-v3.2
+          temperature: 0.7
+      embedding:
+        options:
+          model: text-embedding-v3
+    
+    vectorstore:
+      pgvector:
+        index-type: HNSW
+        distance-type: COSINE_DISTANCE
+        dimensions: 1536
+        remove-existing-vector-store-table: false
+
+# 应用自定义配置
+app:
+  rag:
+    preload:
+      enabled: false
+      paths:
+        - "classpath:docs/company-rules/*.pdf"
+  llm:
+    cache:
+      enabled: true
+      ttl-seconds: 1800
+      ttl-random-offset: 300
+      max-size: 10000
+  rag-cache:
+    enabled: true
+    ttl-seconds: 3600
+    ttl-random-offset: 300
+
+# 阿里云 OSS 配置（请填入真实值）
+aliyun:
+  oss:
+    endpoint: oss-cn-shanghai.aliyuncs.com
+    accessKeyId: YOUR_OSS_ACCESS_KEY_ID
+    accessKeySecret: YOUR_OSS_ACCESS_KEY_SECRET
+    bucketName: YOUR_BUCKET_NAME
+    urlPrefix: ''
+
+# Agent 工具配置（请填入真实值）
+agent:
+  tavily:
+    api-key: YOUR_TAVILY_API_KEY
+    endpoint: https://api.tavily.com/search
+    max-results: 5
