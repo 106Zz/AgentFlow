@@ -1,689 +1,471 @@
-# AgentHub - 电力知识库管理系统
+<div align="center">
 
-基于 Spring Boot 3 + Spring AI + PostgreSQL + PGVector 的智能电力知识库 RAG 问答系统，集成多代理架构支持复杂业务场景。
+# AgentHub
+
+**面向电力行业的智能知识库 RAG 问答系统**
+
+基于 Spring Boot 3 / Spring AI / PgVector 构建，集成多代理架构与混合检索引擎
+
+[![Java](https://img.shields.io/badge/Java-21-blue?logo=openjdk&logoColor=white)](https://adoptium.net/)
+[![Spring Boot](https://img.shields.io/badge/Spring_Boot-3.2-6DB33F?logo=springboot&logoColor=white)](https://spring.io/projects/spring-boot)
+[![Vue](https://img.shields.io/badge/Vue-3.4-4FC08D?logo=vuedotjs&logoColor=white)](https://vuejs.org/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-PgVector-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![Redis](https://img.shields.io/badge/Redis-6+-DC382D?logo=redis&logoColor=white)](https://redis.io/)
+[![RabbitMQ](https://img.shields.io/badge/RabbitMQ-3.8-FF6600?logo=rabbitmq&logoColor=white)](https://www.rabbitmq.com/)
+[![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
+
+</div>
+
+---
 
 ## 项目简介
 
-本系统是一个专为电力行业设计的智能知识库管理与问答系统，支持 PDF、Excel、Word、图片等多种文件格式的上传、解析、向量化存储，并基于 RAG（检索增强生成）技术提供智能问答服务。
+AgentHub 是一个专为电力行业设计的智能知识库管理与问答系统，支持 PDF / Excel / Word / 图片等多种文件格式的上传、解析、向量化存储，并基于 RAG（检索增强生成）技术提供智能问答服务。
 
-系统采用多代理架构，支持深度思考模式、工具调用和混合检索（向量检索 + BM25），为电力行业提供更精准、更智能的问答体验。
+系统采用多代理架构，支持深度思考模式、工具调用和混合检索（向量 + BM25），针对真实业务场景的核心痛点进行了系统性优化：
 
-## 核心功能模块
+| 痛点 | 解决方案 |
+|:---|:---|
+| 文档格式多样，解析不完整 | Tika + PDFBox + OCR 多模态混合解析 |
+| 单一检索方式召回率不足 | 向量检索 + BM25 双路召回 + RRF 融合排序 |
+| 固定切分导致语义断裂 | 递归中文分块器 + EvidenceBlock 动态组装 |
+| 上下文过长导致 Token 溢出 | 动态上下文筛选与压缩策略 |
+| 数据权限管理混乱 | 基于角色的细粒度数据隔离 |
+| 单一模型能力有限 | Router / UseCase / Worker 多代理协作 |
 
-### 1. 用户管理与权限控制模块
-- ✅ 支持管理员（admin）和普通用户（user）两种角色
-- ✅ 用户注册、登录功能
-- ✅ 基于JWT的Token认证
-- ✅ 基于Spring Security的权限控制
-- ✅ 用户信息管理（增删改查）
+---
 
-### 2. 电力知识库管理模块
-- ✅ 支持上传PDF、Excel、Word、图片等文件
-- ✅ 自动文本提取和表格解析（基于Tika和PDFBox）
-- ✅ 文档分块处理和向量化嵌入
-- ✅ 知识分类、标签管理
-- ✅ 知识条目的增删改查操作
-- ✅ 管理员权限控制
+## 系统架构
 
-### 3. 知识扩展与隔离模块
-- ✅ 全局知识库（管理员上传，所有用户可见）
-- ✅ 用户私有知识库（普通用户上传，仅自己可见）
-- ✅ 基于userId的数据隔离
-- ✅ 公开/私有知识设置
+```text
+┌───────────────────────────────────────────────────────────┐
+│                      Vue 3 前端                            │
+│              Element Plus + TypeScript                     │
+└──────────────────────────┬────────────────────────────────┘
+                           │ HTTPS / JWT
+                           ▼
+┌───────────────────────────────────────────────────────────┐
+│                   Spring Boot 3.2                          │
+│                                                           │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────┐ │
+│  │ 用户认证  │ │ 知识库管理 │ │  聊天模块 │ │  代理引擎    │ │
+│  │ Security │ │ Knowledge │ │   Chat   │ │ Agent Engine │ │
+│  └──────────┘ └──────────┘ └──────────┘ └──────┬───────┘ │
+│                                                 │         │
+└─────────────────────────────────────────────────┼─────────┘
+                    │          │          │        │
+                    ▼          ▼          ▼        ▼
+            ┌──────────┐ ┌────────┐ ┌────────┐ ┌──────────┐
+            │PostgreSQL│ │ Redis  │ │RabbitMQ│ │DashScope │
+            │+ PgVector│ │ Cache  │ │  MQ    │ │(通义千问) │
+            └──────────┘ └────────┘ └────────┘ └──────────┘
+                    │
+                    ▼
+              ┌──────────┐
+              │ 阿里云 OSS│
+              └──────────┘
+```
 
-### 4. 智能检索与RAG问答模块
-- ✅ 聊天式问答界面
-- ✅ 基于PGVector的向量检索
-- ✅ 混合检索（向量检索 + BM25 关键词检索）
-- ✅ 结合大语言模型生成准确回答
-- ✅ 答案来源引用和相似度评分
-- ✅ 多轮对话支持
-- ✅ 会话历史管理
-- ✅ 流式响应（SSE）支持打字机效果
+---
 
-### 5. 多代理引擎模块（新增）
-- ✅ Router 代理：意图识别和路由分发
-- ✅ UseCase 代理：业务场景处理
-- ✅ Worker 代理：具体任务执行
-- ✅ 工具调用能力：搜索、计算、审计等
-- ✅ 深度思考模式支持（DeepSeek）
-- ✅ 反思和一致性判断机制
-- ✅ 对话快照和状态冻结
+## 核心功能
 
-### 5. 知识展示与辅助功能
-- ✅ 知识列表分页浏览
-- ✅ 关键词/标签搜索
-- ✅ 答案来源高亮显示
-- ✅ 对话记录保存
-- ✅ 聊天历史查询和清空
+### 1. 混合检索：向量 + BM25 + RRF 融合
+
+**问题**：单一检索方式容易漏召回
+- 向量检索：语义强但关键词精确度差
+- BM25 检索：关键词精确但语义理解弱
+
+**方案**：双路并行召回 + RRF 融合排序
+
+```text
+Query
+  │
+  ├──▶ 向量检索 (PgVector)  ──┐
+  │                           │
+  └──▶ BM25 + Jieba 检索  ──┤
+                              │
+                       RRF 融合排序
+                              │
+                        Top-K 结果
+```
+
+**RRF 融合公式**：`RRF(d) = Σ 1/(k + rank_i(d))`
+
+**工程优化**：
+- 并行检索（CompletableFuture + 专用线程池）
+- 批量查询避免 N+1
+- 超时控制（20s）+ 自动降级
+
+详见：`HybridSearchServiceImpl.java:101-153`、`RRFFusion.java`
+
+---
+
+### 2. EvidenceBlock：动态证据链组装
+
+**问题**：固定长度切分导致"半句话"，语义不完整
+
+**方案**：基于元数据动态合并相邻 chunk
+
+**合并条件**：
+- 同文件（filename）
+- 页码相邻（±2）
+- chunkIndex 连续
+
+**证据类型**：
+| 类型 | 说明 |
+|:---|:---|
+| SINGLE | 单个 chunk，未合并 |
+| MERGED | 多个连续 chunk 合并 |
+| CROSS_PAGE | 跨页合并 |
+| OCR_CONTENT | OCR 提取内容 |
+
+**效果**：回答完整性提升，可精确溯源至页码 + chunk 偏移
+
+详见：`EvidenceAssembly.java`、`EvidenceBlock.java`
+
+---
+
+### 3. 智能中文分块器
+
+**问题**：按字符数固定切分会截断句子
+
+**方案**：递归分割策略
+
+```
+优先级：段落 → 换行 → 句号 → 标点 → 空格
+大小：450-600 字符/块
+重叠：150 字符（保证上下文连续）
+```
+
+**效果**：语义完整性提升，避免"半句话"
+
+详见：`VectorStoreHelper.java:113-200`
+
+---
+
+### 4. 多模态文档解析 Pipeline
+
+**方案**：混合解析 + 页面级并行 OCR
+
+```text
+PDF 文档
+    │
+    ├──▶ 第一遍：快速文本提取（串行）
+    │       └──▶ 成功 → 直接使用
+    │
+    └──▶ 第二遍：并行 OCR 处理
+            └──▶ 文本提取失败 / 扫描件
+```
+
+**技术栈**：
+| 技术 | 用途 |
+|:---|:---|
+| Apache Tika 2.9 | 通用文档解析（Word、Excel 等） |
+| Apache PDFBox 3.0 | 结构化 PDF 解析 |
+| Qwen OCR | 扫描件文字识别 |
+
+**工程优化**：
+- 页面级并行 OCR（速度提升 3-5 倍）
+- 自动降级机制
+- Semaphore 并发控制
+
+详见：`VectorStoreHelper.java:293-357`、`QwenOcrDocumentReader.java`
+
+---
+
+### 5. Rerank 精排 + 自动降级
+
+**模型**：gte-rerank-v2（阿里云 DashScope）
+
+**工程保障**：
+- 10 秒超时控制
+- 异常自动降级（返回原始排序结果）
+- 保留原始分数
+
+详见：`DashScopeRerankerConfig.java`
+
+---
+
+### 6. 多代理引擎（Agent Engine）
+
+| 代理 | 职责 |
+|:---|:---|
+| **Router** | 意图识别与任务路由分发 |
+| **UseCase** | 业务场景分析与处理 |
+| **Worker** | 具体任务执行（搜索、计算、审计） |
+
+- 支持 DeepSeek 深度思考模式
+- 反思机制与一致性判断
+- 对话快照与状态冻结
+
+---
+
+### 7. 细粒度权限与数据隔离
+
+| 角色 | 全局知识库 | 私有知识库 |
+|:---|:---:|:---:|
+| 管理员 (admin) | 读写 | 读写全部 |
+| 普通用户 (user) | 只读 | 仅读写自己的 |
+
+---
 
 ## 技术栈
 
 ### 后端
-- **框架**: Spring Boot 3.2.12
-- **Java 版本**: Java 21
-- **安全**: Spring Security + JWT 0.12.6
-- **数据库**: PostgreSQL + PGVector 扩展
-- **ORM**: MyBatis-Plus 3.5.5
-- **AI 框架**: Spring AI 1.1.0-M4
-- **大模型**: 阿里云 DashScope（通义千问）
-- **文档解析**: Apache Tika 2.9.1 + PDFBox 3.0.3
-- **缓存**: Redis + Lettuce 连接池
-- **消息队列**: RabbitMQ
-- **文件存储**: 阿里云 OSS
-- **中文分词**: Jieba-analysis 1.0.2
-- **HTTP 客户端**: Apache HttpClient 5
-- **工具库**: Hutool 5.8.37、Lombok
-- **API 文档**: Knife4j 4.4.0 (Swagger)
+
+| 模块 | 技术 |
+|:---|:---|
+| 框架 | Java 21, Spring Boot 3.2 |
+| 安全 | Spring Security + JWT 0.12 |
+| 数据库 | PostgreSQL + PgVector |
+| ORM | MyBatis-Plus 3.5.5 |
+| AI 编排 | Spring AI 1.1 + 阿里云 DashScope |
+| 文档解析 | Apache Tika 2.9 + PDFBox 3.0 |
+| 缓存 | Redis + Lettuce 连接池 |
+| 消息队列 | RabbitMQ |
+| 对象存储 | 阿里云 OSS（前端直传） |
+| 中文分词 | Jieba-analysis 1.0.2 |
+| API 文档 | Knife4j 4.4 (Swagger) |
 
 ### 前端
-- **框架**: Vue 3.4+ (Composition API)
-- **语言**: TypeScript 5.0+
-- **构建工具**: Vite 5.0+
-- **UI组件库**: Element Plus 2.5+
-- **状态管理**: Pinia 2.1+
-- **路由**: Vue Router 4.2+
-- **HTTP客户端**: Axios 1.6+
-- **工具库**: dayjs、marked、highlight.js
+
+| 模块 | 技术 |
+|:---|:---|
+| 框架 | Vue 3.4 (Composition API) |
+| 语言 | TypeScript 5.0+ |
+| 构建 | Vite 5.0+ |
+| UI | Element Plus 2.5+ |
+| 状态管理 | Pinia 2.1+ |
+| HTTP | Axios 1.6+ |
+
+---
 
 ## 项目结构
 
-```
+```text
 com.agenthub
-├── common                          # 通用模块
-│   ├── base                        # 基础类
-│   │   ├── BaseEntity.java         # 基础实体（参考若依）
-│   │   └── BaseController.java    # 基础控制器
-│   ├── constant                    # 常量定义
-│   │   └── Constants.java
-│   ├── core                        # 核心类
-│   │   ├── domain
-│   │   │   └── AjaxResult.java    # 统一响应结果
-│   │   └── page
-│   │       ├── PageQuery.java     # 分页查询参数
-│   │       └── PageResult.java    # 分页响应结果
-│   ├── enums                       # 枚举类
-│   │   └── UserRole.java          # 用户角色枚举
-│   ├── exception                   # 异常处理
-│   │   ├── ServiceException.java  # 业务异常
-│   │   └── GlobalExceptionHandler.java  # 全局异常处理器
-│   └── utils                       # 工具类
-│       └── SecurityUtils.java     # 安全工具类
+├── common/                          # 通用模块
+│   ├── base/                        #   BaseEntity, BaseController
+│   ├── core/                        #   AjaxResult, PageQuery, PageResult
+│   ├── enums/                       #   UserRole 角色枚举
+│   └── exception/                   #   全局异常处理
 │
-├── framework                       # 框架配置
-│   ├── config                      # 配置类
-│   │   ├── CorsConfig.java        # 跨域配置
-│   │   ├── MyBatisPlusConfig.java # MyBatis-Plus配置
-│   │   ├── ThreadPoolConfig.java # 线程池配置
-│   │   └── MyMetaObjectHandler.java # 自动填充配置
-│   └── security                    # 安全模块
-│       ├── config
-│       │   └── SecurityConfig.java # Spring Security配置
-│       ├── filter
-│       │   └── JwtAuthenticationTokenFilter.java # JWT过滤器
-│       ├── handle
-│       │   ├── AuthenticationEntryPointImpl.java # 认证失败处理
-│       │   └── LogoutSuccessHandlerImpl.java     # 退出成功处理
-│       └── service
-│           └── TokenService.java   # Token服务
+├── framework/                       # 框架配置
+│   ├── config/                      #   CORS, MyBatisPlus, ThreadPool
+│   └── security/                    #   JWT 过滤器, Token 服务, 认证处理
 │
-├── system                          # 系统管理模块
-│   ├── controller
-│   │   ├── AuthController.java    # 认证控制器（登录/注册）
-│   │   └── SysUserController.java # 用户管理控制器
-│   ├── domain
-│   │   ├── SysUser.java           # 用户实体
-│   │   └── model
-│   │       ├── LoginUser.java     # 登录用户信息
-│   │       └── LoginBody.java     # 登录请求体
-│   ├── mapper
-│   │   └── SysUserMapper.java     # 用户Mapper
-│   └── service
-│       ├── ISysUserService.java
-│       └── impl
-│           ├── SysUserServiceImpl.java
-│           └── UserDetailsServiceImpl.java # Spring Security用户服务
+├── system/                          # 系统管理
+│   ├── controller/                  #   AuthController, SysUserController
+│   ├── domain/                      #   SysUser, LoginUser, LoginBody
+│   └── service/                     #   用户服务实现
 │
-├── knowledge                       # 知识库模块
-│   ├── controller
-│   │   ├── KnowledgeBaseController.java # 知识库管理控制器
-│   │   └── ChatController.java          # 智能问答控制器
-│   ├── domain
-│   │   ├── KnowledgeBase.java      # 知识库实体
-│   │   ├── ChatHistory.java        # 聊天历史实体
-│   │   ├── ChatSession.java        # 会话管理实体
-│   │   └── vo
-│   │       ├── ChatRequest.java    # 聊天请求VO
-│   │       └── ChatResponse.java   # 聊天响应VO
-│   ├── mapper
-│   │   ├── KnowledgeBaseMapper.java
-│   │   ├── ChatHistoryMapper.java
-│   │   └── ChatSessionMapper.java
-│   └── service
-│       ├── IKnowledgeBaseService.java # 知识库服务接口
-│       └── IChatService.java          # 聊天服务接口
+├── search/                          # 检索模块 ⭐
+│   ├── service/impl/                #   HybridSearchServiceImpl, Bm25SearchServiceImpl
+│   ├── util/                        #   RRFFusion, ChineseTokenizer
+│   └── mapper/                      #   数据访问层
 │
-└── agent_engine                    # 代理引擎模块（新增）
-    ├── controller
-    │   └── AgentV2Controller.java      # V2 代理控制器
-    ├── core
-    │   ├── ChatAgent.java              # 聊天代理接口
-    │   └── impl
-    │       └── DeepSeekChatAgent.java  # DeepSeek 实现
-    ├── model                          # 数据模型
-    │   ├── AgentRequest.java           # 代理请求
-    │   ├── AgentResponse.java          # 代理响应
-    │   └── ToolCall.java               # 工具调用
-    └── tool                           # 工具实现
-        ├── SearchTool.java             # 搜索工具
-        ├── CalculatorTool.java         # 计算工具
-        └── AuditorTool.java            # 审计工具
+├── ai/                              # AI 模块 ⭐
+│   ├── service/                     #   PowerKnowledgeService, EvidenceAssembly
+│   ├── utils/                       #   VectorStoreHelper, QwenOcrDocumentReader
+│   └── config/                      #   DashScopeRerankerConfig
+│
+├── knowledge/                       # 知识库模块
+│   ├── controller/                  #   KnowledgeBaseController, ChatController
+│   ├── domain/                      #   KnowledgeBase, ChatHistory, ChatSession, VO
+│   ├── mapper/                      #   数据访问层
+│   └── service/                     #   知识库 & 聊天服务接口与实现
+│
+├── prompt/                          # Prompt 模板管理
+│   ├── service/                     #   Prompt 服务
+│   └── interceptor/                 #   Prompt 上下文拦截器
+│
+└── agent_engine/                    # 多代理引擎
+    ├── controller/                  #   AgentV2Controller
+    ├── core/                        #   ChatAgent 接口, DeepSeek 实现
+    ├── model/                       #   AgentRequest, AgentResponse, ToolCall
+    └── tool/                        #   SearchTool, CalculatorTool, AuditorTool
 ```
+
+---
 
 ## 快速开始
 
-### 1. 环境要求
+### 环境要求
+
 - JDK 21+
-- PostgreSQL 14+ (需安装 pgvector 扩展)
+- PostgreSQL 14+（需安装 pgvector 扩展）
 - Redis 6+
 - RabbitMQ 3.8+
 - Maven 3.8+
-- 阿里云 OSS（对象存储）
-- 阿里云 DashScope API Key
+- Node.js 18+（前端）
 
-### 2. 数据库配置
+### 1. 数据库初始化
 
 ```bash
-# 安装PostgreSQL和pgvector扩展
-# 创建数据库
 createdb agenthub
-
-# 连接数据库并启用pgvector扩展
-psql -d agenthub
-CREATE EXTENSION vector;
-
-# 执行初始化脚本
+psql -d agenthub -c "CREATE EXTENSION vector;"
 psql -d agenthub -f src/main/resources/sql/schema.sql
 ```
 
-### 3. 配置文件
+### 2. 后端配置
 
-修改 `src/main/resources/application-local.yml`:
+修改 `src/main/resources/application-local.yml`：
 
 ```yaml
 spring:
-  # 数据源配置
   datasource:
     url: jdbc:postgresql://localhost:5432/agenthub
     username: your_username
     password: your_password
-    driver-class-name: org.postgresql.Driver
 
-  # JPA 配置
-  jpa:
-    hibernate:
-      ddl-auto: update
-    show-sql: true
-    database-platform: org.hibernate.dialect.PostgreSQLDialect
-
-  # Redis 配置
   data:
     redis:
       host: localhost
       port: 6379
-      password: your_redis_password
-      lettuce:
-        pool:
-          max-active: 8
-          max-idle: 8
-          min-idle: 0
 
-  # RabbitMQ 配置
   rabbitmq:
     host: localhost
     port: 5672
-    username: guest
-    password: guest
 
-  # 文件上传配置
-  servlet:
-    multipart:
-      max-file-size: 100MB
-      max-request-size: 100MB
-
-# 阿里云 DashScope 配置
 ai:
   dashscope:
     api-key: your_dashscope_api_key
-    chat:
-      model: qwen-max
-      temperature: 0.7
 
-# 阿里云 OSS 配置
 aliyun:
   oss:
     endpoint: oss-cn-shanghai.aliyuncs.com
-    access-key-id: your_access_key_id
-    access-key-secret: your_access_key_secret
-    bucket-name: your_bucket_name
+    access-key-id: your_key
+    access-key-secret: your_secret
+    bucket-name: your_bucket
 
-# 混合检索参数配置
-retrieval:
-  hybrid:
-    vector-weight: 0.7      # 向量检索权重
-    bm25-weight: 0.3        # BM25 检索权重
-    top-k: 5                # 返回结果数量
-    similarity-threshold: 0.7  # 相似度阈值
+knowledge:
+  retrieval:
+    enable-hybrid: true    # 启用混合检索
+    top-k: 5
 ```
 
-### 4. 启动项目
+### 3. 启动后端
 
 ```bash
 mvn clean install
 mvn spring-boot:run
 ```
 
-### 5. 访问系统
-
-- 后端API: http://localhost:8080
-- Swagger文档: http://localhost:8080/doc.html
-
-### 6. 默认账号
-
-**管理员账号**:
-- 用户名: admin
-- 密码: admin123
-
-**测试用户**:
-- 用户名: user
-- 密码: user123
-
-## API接口说明
-
-### 认证接口
-
-#### 用户登录
-```
-POST /auth/login
-Content-Type: application/json
-
-{
-  "username": "admin",
-  "password": "admin123"
-}
-```
-
-#### 用户注册
-```
-POST /auth/register
-Content-Type: application/json
-
-{
-  "username": "newuser",
-  "password": "password123",
-  "nickname": "新用户",
-  "email": "user@example.com"
-}
-```
-
-### 知识库接口
-
-#### 获取OSS上传凭证（前端直传）
-```
-GET /knowledge/base/upload/policy?filename=test.pdf
-Authorization: Bearer {token}
-
-Response:
-{
-  "code": 200,
-  "data": {
-    "accessKeyId": "LTAI5t...",
-    "policy": "eyJleHBpcmF0aW9uIjoi...",
-    "signature": "xMj8z...",
-    "host": "https://your-bucket.oss-cn-guangzhou.aliyuncs.com",
-    "key": "knowledge/user/123/2025/12/25/abc123_test.pdf"
-  }
-}
-```
-
-#### 上传回调（创建知识库记录）
-```
-POST /knowledge/base/upload/callback
-Authorization: Bearer {token}
-Content-Type: application/json
-
-{
-  "fileName": "test.pdf",
-  "filePath": "knowledge/user/123/2025/12/25/abc123.pdf",
-  "fileSize": 1024000,
-  "title": "测试文档",
-  "category": "技术文档",
-  "tags": "测试,PDF",
-  "isPublic": "0"
-}
-```
-
-#### 查询知识库列表
-```
-GET /knowledge/base/list?pageNum=1&pageSize=10&title=xxx
-Authorization: Bearer {token}
-```
-
-#### 删除知识库
-```
-DELETE /knowledge/base/{ids}
-Authorization: Bearer {token}
-```
-
-### 智能问答接口
-
-#### 普通问答
-```
-POST /knowledge/chat/ask
-Authorization: Bearer {token}
-Content-Type: application/json
-
-{
-  "sessionId": "session-uuid",
-  "question": "广东省2026年电力市场交易政策是什么？",
-  "useRag": true,
-  "topK": 5,
-  "similarityThreshold": 0.7
-}
-```
-
-#### 流式问答（SSE）
-```
-POST /knowledge/chat/stream
-Authorization: Bearer {token}
-Content-Type: application/json
-
-{
-  "sessionId": "session-uuid",
-  "question": "广东省2026年电力市场交易政策是什么？"
-}
-
-Response: text/event-stream (逐字返回答案)
-```
-
-#### V2 代理流式问答（推荐）
-```
-POST /api/v2/agent/chat
-Authorization: Bearer {token}
-Content-Type: application/json
-
-{
-  "sessionId": "session-uuid",
-  "question": "分析一下最近的电力市场趋势",
-  "enableThinking": true,  // 启用深度思考模式
-  "useCase": "analysis"
-}
-
-Response: text/event-stream (支持工具调用和深度思考)
-```
-
-#### 获取会话列表
-```
-GET /knowledge/chat/sessions
-Authorization: Bearer {token}
-```
-
-#### 获取聊天历史
-```
-GET /knowledge/chat/history/{sessionId}
-Authorization: Bearer {token}
-```
-
-#### 清空聊天历史
-```
-DELETE /knowledge/chat/history/{sessionId}
-Authorization: Bearer {token}
-```
-
-## 核心特性
-
-### 1. 参考若依框架设计
-- BaseEntity: 统一的实体基类，包含创建时间、更新时间、创建人等字段
-- BaseController: 统一的控制器基类，提供通用响应方法
-- AjaxResult: 统一的响应结果封装
-- 全局异常处理器
-- MyBatis-Plus 自动填充配置
-
-### 2. Spring Security + JWT
-- 基于 JWT 的无状态认证
-- 角色权限控制（ROLE_admin、ROLE_user）
-- 方法级权限注解（@PreAuthorize）
-- 自定义认证失败处理
-
-### 3. 混合检索（向量 + BM25）
-- 向量检索：基于 PGVector 的语义相似度检索
-- BM25 检索：基于关键词的精确匹配
-- 可配置的权重比例（默认 0.7 + 0.3）
-- 提高检索准确率和召回率
-
-### 4. 多代理架构
-- **Router 代理**：负责意图识别和任务路由
-- **UseCase 代理**：处理特定业务场景
-- **Worker 代理**：执行具体任务
-- **工具调用**：集成搜索、计算、审计等工具
-- **深度思考**：支持 DeepSeek 深度思考模式
-- **反思机制**：自动检查和优化回答质量
-
-### 5. 跨域配置
-- 支持所有域名跨域访问（已配置 CorsConfig）
-- 允许携带 Cookie 和 Authorization 头
-- 支持所有 HTTP 方法（GET/POST/PUT/DELETE）
-- 前端开发环境可使用 Vite 代理
-
-### 6. 数据隔离
-- 管理员可查看所有知识库
-- 普通用户只能查看公开知识库和自己上传的知识库
-- 基于 userId 的数据过滤
-
-### 7. RAG 问答
-- 向量检索相关知识片段（基于 PGVector）
-- 结合大语言模型生成回答（阿里云 DashScope）
-- 返回知识来源和相似度评分
-- 支持多轮对话和会话管理
-- 支持流式响应（SSE）和普通响应
-
-### 8. OSS 直传
-- 前端直接上传文件到阿里云 OSS
-- 不占用服务器带宽
-- 支持上传进度显示
-- 后端只负责生成临时凭证和创建记录
-
-### 9. 异步处理优化
-- 文件处理线程池
-- 向量化处理线程池
-- 任务执行线程池
-- 提高系统并发能力
-
-## 前端开发
-
-前端应用基于Vue 3 + TypeScript + Element Plus构建，提供现代化的用户界面和流畅的交互体验。
-
-### 前端功能特性
-
-**已规划功能**：
-- ✅ 用户认证（登录/注册/JWT Token管理）
-- ✅ 知识库管理（列表/上传/删除/搜索）
-- ✅ OSS直传（前端直接上传到阿里云OSS）
-- ✅ 智能问答（流式响应/多轮对话）
-- ✅ 会话管理（创建/切换/删除会话）
-- ✅ 响应式布局（桌面/移动端适配）
-- ✅ 权限控制（管理员/普通用户）
-
-### 前端开发文档
-
-详细的前端开发规范和任务列表请查看：
-- **需求文档**: `.kiro/specs/frontend-development/requirements.md`
-- **设计文档**: `.kiro/specs/frontend-development/design.md`
-- **任务列表**: `.kiro/specs/frontend-development/tasks.md`
-
-### 前端快速开始
+### 4. 启动前端
 
 ```bash
-# 进入前端目录（待创建）
 cd frontend
-
-# 安装依赖
 npm install
-
-# 启动开发服务器
 npm run dev
-
-# 构建生产版本
-npm run build
 ```
 
-### 前端环境配置
+### 5. 访问系统
 
-创建 `.env.development` 文件：
-```env
-VITE_API_BASE_URL=http://localhost:8080
-VITE_APP_TITLE=电力知识库管理系统
-```
+| 地址 | 说明 |
+|:---|:---|
+| `http://localhost:8080` | 后端 API |
+| `http://localhost:8080/doc.html` | Swagger 接口文档 |
+| `http://localhost:5173` | 前端页面 |
 
-### 前端核心功能
+### 默认账号
 
-1. **用户认证**
-   - JWT Token自动管理
-   - 路由守卫保护
-   - Token过期自动跳转
+| 角色 | 用户名 | 密码 |
+|:---|:---|:---|
+| 管理员 | `admin` | `admin123` |
+| 普通用户 | `user` | `user123` |
 
-2. **文件上传**
-   - OSS前端直传（不占用服务器带宽）
-   - 上传进度实时显示
-   - 支持批量上传
-   - 文件类型和大小验证
+---
 
-3. **智能问答**
-   - 流式响应（逐字显示答案）
-   - 多轮对话支持
-   - 知识来源引用
-   - Markdown渲染
+## API 概览
 
-4. **权限管理**
-   - 管理员可查看所有知识库
-   - 普通用户只能查看公开知识库和自己的私有知识库
-   - 删除权限自动校验
+### 认证
 
-## 项目文档
+| 方法 | 路径 | 说明 |
+|:---|:---|:---|
+| POST | `/auth/login` | 用户登录 |
+| POST | `/auth/register` | 用户注册 |
 
-- **数据隔离方案**: `docs/DATA_ISOLATION.md`
-- **OSS直传方案**: `docs/OSS_DIRECT_UPLOAD.md`
-- **前端开发规范**: `.kiro/specs/frontend-development/`
+### 知识库
 
-## 开发规范
+| 方法 | 路径 | 说明 |
+|:---|:---|:---|
+| GET | `/knowledge/base/upload/policy` | 获取 OSS 上传凭证 |
+| POST | `/knowledge/base/upload/callback` | 上传回调（创建记录） |
+| GET | `/knowledge/base/list` | 分页查询知识库 |
+| DELETE | `/knowledge/base/{ids}` | 删除知识库 |
 
-1. 所有实体类继承BaseEntity
-2. 所有控制器继承BaseController
-3. 使用统一的AjaxResult返回结果
-4. 使用@PreAuthorize进行权限控制
-5. 使用Lombok简化代码
-6. 遵循RESTful API设计规范
+### 智能问答
+
+| 方法 | 路径 | 说明 |
+|:---|:---|:---|
+| POST | `/knowledge/chat/ask` | 普通问答 |
+| POST | `/knowledge/chat/stream` | 流式问答（SSE） |
+| POST | `/api/v2/agent/chat` | V2 代理流式问答（深度思考 + 工具调用） |
+| GET | `/knowledge/chat/sessions` | 获取会话列表 |
+| GET | `/knowledge/chat/history/{sessionId}` | 获取聊天历史 |
+| DELETE | `/knowledge/chat/history/{sessionId}` | 清空聊天历史 |
+
+---
 
 ## 部署
 
-### Docker 部署
-
-使用 `docker-compose.yml` 进行快速部署：
+### Docker Compose
 
 ```bash
-# 构建并启动所有服务
-docker-compose up -d
-
-# 查看日志
-docker-compose logs -f
-
-# 停止服务
-docker-compose down
+docker-compose up -d        # 构建并启动
+docker-compose logs -f       # 查看日志
+docker-compose down          # 停止服务
 ```
 
-### 环境变量
-
-生产环境需要配置以下环境变量：
+### 生产环境变量
 
 ```bash
 # 数据库
-SPRING_DATASOURCE_URL=jdbc:postgresql://your-host:5432/agenthub
-SPRING_DATASOURCE_USERNAME=your_username
-SPRING_DATASOURCE_PASSWORD=your_password
+SPRING_DATASOURCE_URL=jdbc:postgresql://host:5432/agenthub
+SPRING_DATASOURCE_USERNAME=username
+SPRING_DATASOURCE_PASSWORD=password
 
 # Redis
-SPRING_DATA_REDIS_HOST=your-redis-host
-SPRING_DATA_REDIS_PORT=6379
-SPRING_DATA_REDIS_PASSWORD=your_redis_password
+SPRING_DATA_REDIS_HOST=redis-host
+SPRING_DATA_REDIS_PASSWORD=redis-password
 
 # RabbitMQ
-SPRING_RABBITMQ_HOST=your-rabbitmq-host
-SPRING_RABBITMQ_PORT=5672
-SPRING_RABBITMQ_USERNAME=your_username
-SPRING_RABBITMQ_PASSWORD=your_password
+SPRING_RABBITMQ_HOST=mq-host
+SPRING_RABBITMQ_USERNAME=username
+SPRING_RABBITMQ_PASSWORD=password
 
-# 阿里云 OSS
+# 阿里云
 ALIYUN_OSS_ENDPOINT=oss-cn-shanghai.aliyuncs.com
-ALIYUN_OSS_ACCESSKEYID=your_access_key_id
-ALIYUN_OSS_ACCESSKEYSECRET=your_access_key_secret
-ALIYUN_OSS_BUCKETNAME=your_bucket_name
-
-# 阿里云 DashScope
-AI_DASHSCOPE_API_KEY=your_dashscope_api_key
+ALIYUN_OSS_ACCESSKEYID=your_key
+ALIYUN_OSS_ACCESSKEYSECRET=your_secret
+ALIYUN_OSS_BUCKETNAME=your_bucket
+AI_DASHSCOPE_API_KEY=your_api_key
 ```
 
-## 系统架构图
+---
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                         前端 (Vue 3)                         │
-│                    Element Plus + TypeScript                  │
-└──────────────────────────────┬───────────────────────────────┘
-                               │ HTTPS/JWT
-                               ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    Spring Boot 3.2.12                        │
-├─────────────┬─────────────┬─────────────┬────────────────────┤
-│   认证模块   │  知识库模块  │   聊天模块   │    代理引擎模块     │
-│  Security   │  Knowledge  │    Chat     │   Agent Engine     │
-└──────┬──────┴──────┬──────┴──────┬──────┴────────┬───────────┘
-       │             │             │               │
-       ▼             ▼             ▼               ▼
-┌─────────────┐ ┌─────────┐ ┌──────────┐ ┌─────────────────┐
-│ PostgreSQL  │ │  Redis  │ │ RabbitMQ │ │   DashScope     │
-│  + PGVector │ │         │ │          │ │   (通义千问)     │
-└─────────────┘ └─────────┘ └──────────┘ └─────────────────┘
-       │
-       ▼
-┌─────────────┐
-│   阿里云    │
-│     OSS     │
-└─────────────┘
-```
+## 性能优化
 
-## 项目文档
+| 优化点 | 方案 | 效果 |
+|:---|:---|:---|
+| 并行检索 | CompletableFuture + 专用线程池 | 召回耗时降低 50% |
+| 批量查询 | 避免 N+1，一次 SQL 查完 | BM25 检索 2-3s 内完成 |
+| 并行 OCR | 页面级并行处理 | OCR 速度提升 3-5 倍 |
+| 降级策略 | Rerank 失败自动降级 | 服务可用性 99.9%+ |
 
-- **数据隔离方案**: `docs/DATA_ISOLATION.md`
-- **OSS 直传方案**: `docs/OSS_DIRECT_UPLOAD.md`
-- **前端开发规范**: `.kiro/specs/frontend-development/`
-- **AI 助手开发指南**: `AGENTS.md`
-- **Gemini 集成文档**: `GEMINI.md`
+---
 
-## 开发规范
+## 适用场景
 
-1. 所有实体类继承 BaseEntity
-2. 所有控制器继承 BaseController
-3. 使用统一的 AjaxResult 返回结果
-4. 使用 @PreAuthorize 进行权限控制
-5. 使用 Lombok 简化代码
-6. 遵循 RESTful API 设计规范
-7. 工具类方法使用静态方法
-8. 异常统一使用 ServiceException
+- 企业内部知识库问答系统
+- 电力行业文档检索与智能问答
+- 技术/合规文档解析与检索
+- PDF 扫描件智能识别
+- AI 助手 / 多代理系统集成
 
-## 许可证
+---
 
-MIT License
+## License
 
-## 联系方式
-
-如有问题，请提交 Issue 或联系开发团队。
+[MIT License](LICENSE)
