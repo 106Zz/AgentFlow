@@ -40,6 +40,10 @@ public class AgentModelFactory {
     public static final String INTENT_MODEL = "qwen-plus";
     public static final double INTENT_TEMPERATURE = 0.1;
 
+    /** QueryRewrite 查询改写模型配置 */
+    public static final String QUERY_REWRITE_MODEL = "qwen-plus";
+    public static final double QUERY_REWRITE_TEMPERATURE = 0.7;
+
     /**
      * 1. Worker (打工人): 负责日常对话、工具调用
      * <p>模型: deepseek-v3.2 (响应快，成本低)</p>
@@ -99,6 +103,22 @@ public class AgentModelFactory {
                 .defaultOptions(DashScopeChatOptions.builder()
                         .withModel("qwen-plus")
                         .withTemperature(0.1)
+                        .build())
+                .build();
+    }
+
+    /**
+     * 5. QueryRewrite (查询改写): 负责将口语化查询改写为正式表达
+     * <p>模型: qwen-plus (响应快，改写效果好)</p>
+     * <p>特点: 较高温度，增加多样性，覆盖更多改写可能</p>
+     */
+    @Bean("queryRewriteChatClient")
+    public ChatClient queryRewriteChatClient(ChatClient.Builder builder) {
+        return builder
+                .defaultSystem("你是一个查询改写专家，负责将用户的口语化查询改写为更适合知识库检索的正式表达。")
+                .defaultOptions(DashScopeChatOptions.builder()
+                        .withModel("qwen-plus")
+                        .withTemperature(0.7)
                         .build())
                 .build();
     }

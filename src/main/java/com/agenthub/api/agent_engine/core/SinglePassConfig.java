@@ -3,6 +3,8 @@ package com.agenthub.api.agent_engine.core;
 import com.agenthub.api.agent_engine.config.DashScopeNativeService;
 import com.agenthub.api.agent_engine.service.IntentRecognitionService;
 import com.agenthub.api.ai.service.PowerKnowledgeService;
+import com.agenthub.api.ai.service.gssc.GSSCService;
+import com.agenthub.api.ai.service.LLMCacheService;
 import com.agenthub.api.agent_engine.service.ReflectionService;
 import com.agenthub.api.agent_engine.capability.ToolRegistry;
 import com.agenthub.api.prompt.service.ICaseSnapshotService;
@@ -36,6 +38,8 @@ public class SinglePassConfig {
             ICaseSnapshotService caseSnapshotService,
             com.fasterxml.jackson.databind.ObjectMapper objectMapper,
             DashScopeNativeService nativeService,
+            GSSCService gscService,
+            LLMCacheService llmCacheService,
             @Qualifier("judgeExecutor") Executor judgeExecutor,
             @Qualifier("agentWorkerExecutor") Executor agentWorkerExecutor) {
         return new SinglePassExecutor(
@@ -49,6 +53,8 @@ public class SinglePassConfig {
                 caseSnapshotService,
                 objectMapper,
                 nativeService,
+                gscService,
+                llmCacheService,
                 judgeExecutor,
                 agentWorkerExecutor
         );

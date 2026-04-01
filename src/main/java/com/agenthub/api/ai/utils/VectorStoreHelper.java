@@ -33,6 +33,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Pattern;
 
 /**
@@ -75,12 +77,16 @@ public class VectorStoreHelper {
     @Value("${ocr.trigger.min-length:30}")
     private int ocrMinLength;
 
-    private final Tika tika = new Tika();
-
     // ==================== 常量定义 ====================
 
     /** 向量存储批次大小（DashScope API 限制最大为 10）*/
     private static final int VECTOR_BATCH_SIZE = 10;
+
+    /** OCR 并发控制：最大并行数 */
+    private static final int MAX_PARALLEL_OCR = 4;
+
+    /** OCR 并发控制信号量 */
+    private final Semaphore ocrSemaphore = new Semaphore(MAX_PARALLEL_OCR);
 
     /** Chunk最小长度（字符） */
     private static final int MIN_CHUNK_LENGTH = 50;
@@ -331,39 +337,63 @@ public class VectorStoreHelper {
 
     /**
      * 并行OCR处理多个页面
+     * 注意：使用 Semaphore 限制并行数，避免资源耗尽
      */
     private List<Document> processOcrPagesParallel(PDFRenderer renderer, List<Integer> pages) {
-        // 使用并行流处理，默认使用 ForkJoinPool.commonPool()
-        return pages.parallelStream()
+        log.info("开始OCR处理，共 {} 页，最大并行数: {}", pages.size(), MAX_PARALLEL_OCR);
+        
+        AtomicInteger successCount = new AtomicInteger(0);
+        AtomicInteger failCount = new AtomicInteger(0);
+        
+        List<Document> results = pages.parallelStream()
                 .map(pageIndex -> {
                     try {
-                        log.info("并行OCR处理第 {} 页...", pageIndex + 1);
-                        BufferedImage image = renderer.renderImage(pageIndex, 2.0f);
-                        String ocrText = ocrReader.processSingleImage(image);
+                        // 获取信号量许可，阻塞直到可用
+                        ocrSemaphore.acquire();
+                        try {
+                            log.debug("开始处理第 {} 页 (当前并发: {}/{})", 
+                                pageIndex + 1, 
+                                MAX_PARALLEL_OCR - ocrSemaphore.availablePermits(),
+                                MAX_PARALLEL_OCR);
+                            
+                            BufferedImage image = renderer.renderImage(pageIndex, 2.0f);
+                            String ocrText = ocrReader.processSingleImage(image);
 
-                        if (ocrText != null && !ocrText.isEmpty()) {
-                            Document doc = new Document(ocrText);
-                            doc.getMetadata().put("page_index", pageIndex + 1);
-                            doc.getMetadata().put("ocr_used", true);
-                            return doc;
+                            if (ocrText != null && !ocrText.isEmpty()) {
+                                Document doc = new Document(ocrText);
+                                doc.getMetadata().put("page_index", pageIndex + 1);
+                                doc.getMetadata().put("ocr_used", true);
+                                successCount.incrementAndGet();
+                                return doc;
+                            }
+                        } finally {
+                            // 无论成功失败都要释放许可
+                            ocrSemaphore.release();
                         }
                     } catch (Exception e) {
                         log.error("第 {} 页OCR失败", pageIndex + 1, e);
+                        failCount.incrementAndGet();
                     }
                     return null;
                 })
                 .filter(doc -> doc != null)
                 .toList();
+        
+        log.info("OCR处理完成: 成功 {} 页, 失败 {} 页", successCount.get(), failCount.get());
+        return results;
     }
 
     /**
      * 解析非PDF文件（使用Tika）
+     * 注意：每次创建新的 Tika 实例以保证线程安全
      */
     private List<Document> parseNonPdf(byte[] fileBytes, String filename) throws IOException {
         log.info("使用 Tika 解析非 PDF 文件: {}", filename);
 
         String text;
         try {
+            // 每次创建新实例，避免线程安全问题
+            Tika tika = new Tika();
             text = tika.parseToString(new ByteArrayInputStream(fileBytes));
         } catch (TikaException e) {
             throw new RuntimeException("Tika 解析失败: " + filename, e);

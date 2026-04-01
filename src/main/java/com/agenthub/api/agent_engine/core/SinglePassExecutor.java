@@ -9,6 +9,9 @@ import com.agenthub.api.agent_engine.service.ReflectionService;
 import com.agenthub.api.agent_engine.tool.AgentTool;
 import com.agenthub.api.ai.domain.llm.StreamCallback;
 import com.agenthub.api.ai.service.PowerKnowledgeService;
+import com.agenthub.api.ai.service.LLMCacheService;
+import com.agenthub.api.ai.service.gssc.ContextPacket;
+import com.agenthub.api.ai.service.gssc.GSSCService;
 import com.agenthub.api.prompt.builder.CaseSnapshotBuilder;
 import com.agenthub.api.prompt.enums.CaseStatus;
 import com.agenthub.api.prompt.enums.Scenario;
@@ -27,6 +30,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.util.StringUtils;
 import reactor.core.publisher.Flux;
 
+import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
@@ -90,6 +94,8 @@ public class SinglePassExecutor {
     private final ICaseSnapshotService caseSnapshotService;
     private final ObjectMapper objectMapper;
     private final DashScopeNativeService nativeService;
+    private final GSSCService gscService;  // GSSC 服务
+    private final LLMCacheService llmCacheService;  // LLM 回答缓存
 
     // ==================== 线程池 ====================
 
@@ -129,6 +135,8 @@ public class SinglePassExecutor {
             ICaseSnapshotService caseSnapshotService,
             ObjectMapper objectMapper,
             DashScopeNativeService nativeService,
+            GSSCService gscService,
+            LLMCacheService llmCacheService,
             Executor judgeExecutor,
             Executor agentWorkerExecutor) {
         this.workerClient = workerClient;
@@ -141,6 +149,8 @@ public class SinglePassExecutor {
         this.caseSnapshotService = caseSnapshotService;
         this.objectMapper = objectMapper;
         this.nativeService = nativeService;
+        this.gscService = gscService;
+        this.llmCacheService = llmCacheService;
         this.judgeExecutor = judgeExecutor;
         this.agentWorkerExecutor = agentWorkerExecutor;
     }
@@ -256,17 +266,30 @@ public class SinglePassExecutor {
     // ==================== 私有方法 ====================
 
     /**
-     * 构建消息列表
+     * 构建消息列表（支持 GSSC 流水线）
      */
     private List<Message> buildMessages(AgentContext context, String evidenceContext) {
+        // 如果 GSSC 未启用，使用原来的简单方式
+        if (!gscService.isEnabled()) {
+            return buildMessagesSimple(context, evidenceContext);
+        }
+
+        // 使用 GSSC 流水线
+        return buildMessagesWithGSSC(context, evidenceContext);
+    }
+
+    /**
+     * 简单模式（未启用 GSSC 时的降级方案）
+     */
+    private List<Message> buildMessagesSimple(AgentContext context, String evidenceContext) {
         List<Message> messages = new ArrayList<>();
 
         // 1. System Prompt
         String systemPrompt = buildSystemPrompt(context);
         messages.add(new SystemMessage(systemPrompt));
 
-        // 2. 加载历史记录 (带滑动窗口)
-        List<Message> history = loadRecentHistory(context.getSessionId());
+        // 2. 加载历史记录 (带 GSSC 评分选择)
+        List<Message> history = loadRecentHistory(context.getSessionId(), context.getQuery());
         if (!history.isEmpty()) {
             messages.addAll(history);
             log.debug("[SinglePass] 加载历史记录: 数量={}", history.size());
@@ -284,12 +307,188 @@ public class SinglePassExecutor {
     }
 
     /**
+     * GSSC 模式（使用 GSSC 流水线进行评分选择和压缩）
+     */
+    private List<Message> buildMessagesWithGSSC(AgentContext context, String evidenceContext) {
+        List<Message> messages = new ArrayList<>();
+
+        // 1. System Prompt
+        String systemPrompt = buildSystemPrompt(context);
+
+        // 2. 加载历史记录 (带 GSSC 评分选择)
+        List<Message> history = loadRecentHistory(context.getSessionId(), context.getQuery());
+
+        // 3. 构建 ContextPacket 列表
+        List<ContextPacket> evidencePackets = buildEvidencePackets(evidenceContext);
+        List<ContextPacket> historyPackets = buildHistoryPackets(history);
+
+        // 4. 使用 GSSC 进行评分选择和压缩
+        String gsscContext = gscService.process(
+                evidencePackets,
+                historyPackets,
+                new ArrayList<>(),  // 第一轮没有工具结果
+                systemPrompt,
+                context.getQuery()
+        );
+
+        // 5. 构建消息列表
+        // 由于 GSSC 已经包含了 system prompt 和 context，我们只需要添加用户消息
+        messages.add(new UserMessage(gsscContext));
+
+        log.debug("[SinglePass] GSSC 模式: evidence={}, history={}", 
+                evidencePackets.size(), historyPackets.size());
+
+        return messages;
+    }
+
+    /**
+     * 构建证据 ContextPacket 列表
+     */
+    private List<ContextPacket> buildEvidencePackets(String evidenceContext) {
+        List<ContextPacket> packets = new ArrayList<>();
+
+        if (!StringUtils.hasText(evidenceContext)) {
+            return packets;
+        }
+
+        // 简单按段落分割（实际应该从 knowledgeResult 获取更详细的信息）
+        String[] paragraphs = evidenceContext.split("\n\n");
+        for (String para : paragraphs) {
+            if (para.trim().length() > 10) {
+                packets.add(ContextPacket.builder()
+                        .type(ContextPacket.ContextType.EVIDENCE)
+                        .content(para.trim())
+                        .timestamp(Instant.now())
+                        .tokenCount(GSSCService.estimateTokens(para))
+                        .relevanceScore(0.8)  // 默认分数
+                        .build());
+            }
+        }
+
+        return packets;
+    }
+
+    /**
+     * 构建历史记忆 ContextPacket 列表
+     */
+    private List<ContextPacket> buildHistoryPackets(List<Message> history) {
+        List<ContextPacket> packets = new ArrayList<>();
+
+        if (history == null || history.isEmpty()) {
+            return packets;
+        }
+
+        for (Message msg : history) {
+            String content = msg.getText();
+            if (StringUtils.hasText(content)) {
+                ContextPacket.ContextType type;
+                if (msg instanceof UserMessage) {
+                    type = ContextPacket.ContextType.QUERY;
+                } else {
+                    type = ContextPacket.ContextType.HISTORY;
+                }
+
+                packets.add(ContextPacket.builder()
+                        .type(type)
+                        .content(content)
+                        .timestamp(Instant.now().minusSeconds(packets.size() * 60)) // 简单估算时间
+                        .tokenCount(GSSCService.estimateTokens(content))
+                        .relevanceScore(0.5)  // 历史消息没有向量分数
+                        .build());
+            }
+        }
+
+        return packets;
+    }
+
+    /**
+     * 构建工具结果的 ContextPacket 列表（用于 GSSC 处理）
+     */
+    private List<ContextPacket> buildToolResultPackets(Map<String, String> toolResults) {
+        List<ContextPacket> packets = new ArrayList<>();
+
+        if (toolResults == null || toolResults.isEmpty()) {
+            return packets;
+        }
+
+        for (Map.Entry<String, String> entry : toolResults.entrySet()) {
+            String toolName = entry.getKey();
+            String result = entry.getValue();
+
+            // 截断过长的结果
+            if (result.length() > 5000) {
+                result = result.substring(0, 5000) + "\n...(结果过长已截断)";
+            }
+
+            int tokenCount = GSSCService.estimateTokens(result);
+
+            packets.add(ContextPacket.builder()
+                    .type(ContextPacket.ContextType.TOOL_RESULT)
+                    .content(result)
+                    .timestamp(Instant.now())
+                    .tokenCount(tokenCount)
+                    .relevanceScore(0.9)  // 工具结果通常高度相关
+                    .metadata(Map.of("toolName", toolName))
+                    .build());
+        }
+
+        log.debug("[SinglePass] 构建工具结果 ContextPacket: {} 个", packets.size());
+        return packets;
+    }
+
+    /**
+     * 从消息列表构建历史 ContextPacket（用于 continueAfterTools）
+     */
+    private List<ContextPacket> buildHistoryPacketsFromMessages(List<Message> messages) {
+        List<ContextPacket> packets = new ArrayList<>();
+
+        if (messages == null || messages.isEmpty()) {
+            return packets;
+        }
+
+        // 过滤掉 SystemMessage，只保留 UserMessage 和 AssistantMessage
+        for (Message msg : messages) {
+            if (msg instanceof SystemMessage) {
+                continue;  // 跳过系统消息，GSSC 会单独处理 system prompt
+            }
+
+            String content = msg.getText();
+            if (!StringUtils.hasText(content)) {
+                continue;
+            }
+
+            ContextPacket.ContextType type;
+            if (msg instanceof UserMessage) {
+                type = ContextPacket.ContextType.QUERY;
+            } else if (msg instanceof AssistantMessage) {
+                type = ContextPacket.ContextType.HISTORY;
+            } else {
+                continue;
+            }
+
+            packets.add(ContextPacket.builder()
+                    .type(type)
+                    .content(content)
+                    .timestamp(Instant.now().minusSeconds(packets.size() * 60))
+                    .tokenCount(GSSCService.estimateTokens(content))
+                    .relevanceScore(0.5)
+                    .build());
+        }
+
+        return packets;
+    }
+
+    /**
      * 加载最近的历史消息
-     * <p>从 ChatMemoryRepository 加载，并进行滑动窗口控制</p>
+     * <p>从 ChatMemoryRepository 加载，并进行 GSSC 评分选择</p>
      * <p>注意：会过滤掉历史消息中的 @@THINK_START@@ 和 @@THINK_END@@ 标签，
      * 防止模型在后续回答中模仿这些内部标记</p>
+     *
+     * @param sessionId 会话ID
+     * @param userQuery  当前用户问题（用于计算历史消息相关性）
+     * @return 评分选择后的历史消息列表
      */
-    private List<Message> loadRecentHistory(String sessionId) {
+    private List<Message> loadRecentHistory(String sessionId, String userQuery) {
         try {
             List<Message> allHistory = chatMemoryRepository.findByConversationId(sessionId);
             if (allHistory == null || allHistory.isEmpty()) {
@@ -316,14 +515,59 @@ public class SinglePassExecutor {
                 }
             }
 
-            // 滑动窗口控制 (保留最近 MEMORY_WINDOW_SIZE 条)
-            if (filteredHistory.size() > MEMORY_WINDOW_SIZE) {
-                log.debug("[SinglePass] 历史记录超过窗口大小: {} -> {} (保留最近{}条)",
-                        filteredHistory.size(), MEMORY_WINDOW_SIZE, MEMORY_WINDOW_SIZE);
-                return filteredHistory.subList(filteredHistory.size() - MEMORY_WINDOW_SIZE, filteredHistory.size());
+            // 如果历史记录很少，直接返回
+            if (filteredHistory.size() <= MEMORY_WINDOW_SIZE) {
+                return filteredHistory;
             }
 
-            return filteredHistory;
+            // GSSC 评分选择
+            if (gscService.isEnabled()) {
+                log.debug("[SinglePass] 使用 GSSC 评分选择历史消息: total={}, userQuery={}", 
+                        filteredHistory.size(), userQuery);
+
+                // 构建历史 ContextPacket 列表
+                List<ContextPacket> historyPackets = new ArrayList<>();
+                for (Message msg : filteredHistory) {
+                    String content = msg.getText();
+                    if (!StringUtils.hasText(content)) {
+                        continue;
+                    }
+
+                    ContextPacket.ContextType type = msg instanceof UserMessage 
+                            ? ContextPacket.ContextType.QUERY 
+                            : ContextPacket.ContextType.HISTORY;
+
+                    historyPackets.add(ContextPacket.builder()
+                            .type(type)
+                            .content(content)
+                            .timestamp(Instant.now().minusSeconds(historyPackets.size() * 60))
+                            .tokenCount(GSSCService.estimateTokens(content))
+                            .relevanceScore(0.5)  // 默认分数，会在 selectHistoryMessages 中更新
+                            .build());
+                }
+
+                // 使用 GSSC 评分选择
+                List<ContextPacket> selectedPackets = gscService.selectHistoryMessages(historyPackets, userQuery);
+
+                // 将选中的 ContextPacket 转换回 Message 列表
+                List<Message> selectedMessages = new ArrayList<>();
+                for (ContextPacket packet : selectedPackets) {
+                    if (packet.getType() == ContextPacket.ContextType.QUERY) {
+                        selectedMessages.add(new UserMessage(packet.getContent()));
+                    } else {
+                        selectedMessages.add(new AssistantMessage(packet.getContent()));
+                    }
+                }
+
+                log.debug("[SinglePass] GSSC 历史消息选择完成: {} -> {}", 
+                        filteredHistory.size(), selectedMessages.size());
+                return selectedMessages;
+            } else {
+                // 原有滑动窗口逻辑
+                log.debug("[SinglePass] 滑动窗口控制历史消息: {} -> {}", 
+                        filteredHistory.size(), MEMORY_WINDOW_SIZE);
+                return filteredHistory.subList(filteredHistory.size() - MEMORY_WINDOW_SIZE, filteredHistory.size());
+            }
 
         } catch (Exception e) {
             log.error("[SinglePass] 加载历史记录失败: sessionId={}", sessionId, e);
@@ -833,7 +1077,7 @@ public class SinglePassExecutor {
             return null;
         });
     }
-
+    
     /**
      * 工具执行完成后，继续调用 LLM 生成最终回答
      */
@@ -846,19 +1090,54 @@ public class SinglePassExecutor {
 
         log.info("[SinglePass] 工具执行完成，生成最终回答");
 
-        // 构建新的消息列表
-        List<Message> newMessages = new ArrayList<>(originalMessages);
+        List<Message> newMessages;
 
-        // 添加工具结果
-        StringBuilder toolResultsMsg = new StringBuilder("【工具执行结果】\n");
-        for (Map.Entry<String, String> entry : toolResults.entrySet()) {
-            String result = entry.getValue();
-            if (result.length() > 5000) {
-                result = result.substring(0, 5000) + "\n\n...(结果过长，已截断)";
+        // 构建工具结果的 ContextPacket 列表
+        List<ContextPacket> toolPackets = buildToolResultPackets(toolResults);
+
+        // 如果 GSSC 启用，使用 GSSC 处理
+        if (gscService.isEnabled()) {
+            log.debug("[SinglePass] GSSC 模式处理工具结果");
+
+            // 从原始消息中提取历史消息
+            List<Message> historyMessages = new ArrayList<>(originalMessages);
+
+            // 构建历史 ContextPacket
+            List<ContextPacket> historyPackets = buildHistoryPacketsFromMessages(historyMessages);
+
+            // 获取系统提示词
+            String systemPrompt = buildSystemPrompt(context);
+
+            // 调用 GSSC 处理（包含工具结果）
+            String gsscContext = gscService.process(
+                    new ArrayList<>(),  // evidence已在前一轮处理
+                    historyPackets,
+                    toolPackets,
+                    systemPrompt,
+                    context.getQuery()
+            );
+
+            // 构建新消息（只需要用户消息，因为 GSSC 已经包含了 system 和 context）
+            newMessages = new ArrayList<>();
+            newMessages.add(new UserMessage(gsscContext));
+
+            log.debug("[SinglePass] GSSC 处理完成: toolPackets={}, historyPackets={}",
+                    toolPackets.size(), historyPackets.size());
+        } else {
+            // 原有逻辑（不做压缩）
+            newMessages = new ArrayList<>(originalMessages);
+
+            // 添加工具结果
+            StringBuilder toolResultsMsg = new StringBuilder("【工具执行结果】\n");
+            for (Map.Entry<String, String> entry : toolResults.entrySet()) {
+                String result = entry.getValue();
+                if (result.length() > 5000) {
+                    result = result.substring(0, 5000) + "\n\n...(结果过长，已截断)";
+                }
+                toolResultsMsg.append(String.format("**%s**: %s\n\n", entry.getKey(), result));
             }
-            toolResultsMsg.append(String.format("**%s**: %s\n\n", entry.getKey(), result));
+            newMessages.add(new UserMessage(toolResultsMsg.toString()));
         }
-        newMessages.add(new UserMessage(toolResultsMsg.toString()));
 
         // 转换为 DashScope 格式
         List<com.alibaba.dashscope.common.Message> dashMessages = convertToDashScopeMessages(newMessages);
