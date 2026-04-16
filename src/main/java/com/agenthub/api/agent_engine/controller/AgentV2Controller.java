@@ -27,7 +27,6 @@ import java.util.concurrent.Executor;
 @Slf4j
 @RestController
 @RequestMapping("/api/v2/agent")
-@RequiredArgsConstructor
 public class AgentV2Controller {
 
     private final ChatAgent chatAgent;
@@ -35,6 +34,19 @@ public class AgentV2Controller {
     private final IChatSessionService chatSessionService;
     private final Executor taskExecutor;
     private final Executor sseExecutor;  // 由 Spring 按名称注入 sseExecutor Bean
+
+    public AgentV2Controller(
+            ChatAgent chatAgent,
+            IChatHistoryService chatHistoryService,
+            IChatSessionService chatSessionService,
+            @Qualifier("taskExecutor") Executor taskExecutor,
+            @Qualifier("sseExecutor") Executor sseExecutor) {
+        this.chatAgent = chatAgent;
+        this.chatHistoryService = chatHistoryService;
+        this.chatSessionService = chatSessionService;
+        this.taskExecutor = taskExecutor;
+        this.sseExecutor = sseExecutor;
+    }
 
     @CrossOrigin(origins = "*", maxAge = 3600)
     @PostMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
