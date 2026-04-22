@@ -114,21 +114,10 @@ hybrid-search:
     k1: 1.5                      # 词频饱和参数
     b: 0.75                      # 长度惩罚参数
 
-# GSSC 流水线配置
+# GSC 流水线配置（Structure + Compress）
 gssc:
-  enabled: true                 # 是否启用 GSSC（默认关闭，建议测试后再开启）
+  enabled: true                 # 是否启用 GSC 结构化+压缩
   max-tokens: 3000              # 最大 Token 预算
-
-  # 评分权重配置
-  weights:
-    relevance: 0.6               # 相关性权重
-    recency: 0.3                # 时效性权重
-    importance: 0.1             # 重要性权重
-
-  # 选择数量配置
-  select:
-    evidence-count: 5            # RAG 证据选择数量
-    history-count: 3             # 历史记忆选择数量
 
 # Case 快照冻结配置
 case:
