@@ -1,8 +1,7 @@
 package com.agenthub.api.agent_engine.core;
 
 import com.agenthub.api.agent_engine.capability.ToolRegistry;
-import com.agenthub.api.agent_engine.config.AgentModelFactory;
-import com.agenthub.api.agent_engine.config.DashScopeNativeService;
+import com.agenthub.api.agent_engine.config.LLMService;
 import com.agenthub.api.agent_engine.model.*;
 import com.agenthub.api.agent_engine.service.IntentRecognitionService;
 import com.agenthub.api.agent_engine.service.ReflectionService;
@@ -32,7 +31,6 @@ import reactor.core.publisher.Flux;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
-import java.util.stream.Collectors;
 
 /**
  * 单次执行器
@@ -81,7 +79,7 @@ public class SinglePassExecutor {
     private final ISysPromptService sysPromptService;
     private final ICaseSnapshotService caseSnapshotService;
     private final ObjectMapper objectMapper;
-    private final DashScopeNativeService nativeService;
+    private final LLMService llmService;
     private final GSSCService gscService;
     private final LLMCacheService llmCacheService;
 
@@ -92,8 +90,6 @@ public class SinglePassExecutor {
 
     // ==================== 常量配置 ====================
 
-    private static final String WORKER_MODEL = AgentModelFactory.WORKER_MODEL;
-
     /**
      * 滑动窗口大小 (保留最近 N 条历史消息)
      */
@@ -102,6 +98,8 @@ public class SinglePassExecutor {
     private static final String SYSTEM_PROMPT_CODE = "SYSTEM-RAG-LITE";
 
     // ==================== 构造器 ====================
+
+    private final String workerModel;
 
     public SinglePassExecutor(
             ChatClient workerClient,
@@ -113,11 +111,12 @@ public class SinglePassExecutor {
             ISysPromptService sysPromptService,
             ICaseSnapshotService caseSnapshotService,
             ObjectMapper objectMapper,
-            DashScopeNativeService nativeService,
+            LLMService llmService,
             GSSCService gscService,
             LLMCacheService llmCacheService,
             Executor judgeExecutor,
-            Executor agentWorkerExecutor) {
+            Executor agentWorkerExecutor,
+            String workerModel) {
         this.workerClient = workerClient;
         this.intentRecognition = intentRecognition;
         this.powerKnowledgeService = powerKnowledgeService;
@@ -127,11 +126,12 @@ public class SinglePassExecutor {
         this.sysPromptService = sysPromptService;
         this.caseSnapshotService = caseSnapshotService;
         this.objectMapper = objectMapper;
-        this.nativeService = nativeService;
+        this.llmService = llmService;
         this.gscService = gscService;
         this.llmCacheService = llmCacheService;
         this.judgeExecutor = judgeExecutor;
         this.agentWorkerExecutor = agentWorkerExecutor;
+        this.workerModel = workerModel;
     }
 
     // ==================== 核心执行方法 ====================
@@ -521,13 +521,10 @@ public class SinglePassExecutor {
             newMessages.add(new UserMessage(toolResultsMsg.toString()));
         }
 
-        // 转换为 DashScope 格式
-        List<com.alibaba.dashscope.common.Message> dashMessages = convertToDashScopeMessages(newMessages);
-
         final boolean[] newState = new boolean[]{false, false};
         final StringBuilder secondRoundAnswer = new StringBuilder();
 
-        nativeService.deepThinkStream(WORKER_MODEL, dashMessages, List.of(), new StreamCallback() {
+        llmService.deepThinkStream(workerModel, newMessages, List.of(), new StreamCallback() {
             @Override
             public void onReasoning(String reasoning) {
                 if (reasoning != null && !reasoning.isEmpty()) {
@@ -583,8 +580,6 @@ public class SinglePassExecutor {
      * 流式 LLM 调用
      */
     private Flux<String> doStreamChat(List<Message> messages, AgentContext context) {
-        List<com.alibaba.dashscope.common.Message> dashMessages = convertToDashScopeMessages(messages);
-
         List<AgentTool> tools;
         if (context.isPreRetrievalDone()) {
             tools = List.of();
@@ -599,7 +594,7 @@ public class SinglePassExecutor {
             final List<ToolCall> pendingToolCalls = new ArrayList<>();
             final boolean[] toolCallTriggered = new boolean[]{false};
 
-            nativeService.deepThinkStream(WORKER_MODEL, dashMessages, tools, new StreamCallback() {
+            llmService.deepThinkStream(workerModel, messages, tools, new StreamCallback() {
                 @Override
                 public void onReasoning(String reasoning) {
                     if (reasoning != null && !reasoning.isEmpty()) {
@@ -871,24 +866,4 @@ public class SinglePassExecutor {
         }
     }
 
-    private List<com.alibaba.dashscope.common.Message> convertToDashScopeMessages(
-            List<Message> springMessages) {
-        return springMessages.stream().map(msg -> {
-            com.alibaba.dashscope.common.Message.MessageBuilder builder =
-                    com.alibaba.dashscope.common.Message.builder();
-
-            if (msg instanceof SystemMessage) {
-                builder.role(com.alibaba.dashscope.common.Role.SYSTEM.getValue());
-            } else if (msg instanceof UserMessage) {
-                builder.role(com.alibaba.dashscope.common.Role.USER.getValue());
-            } else if (msg instanceof AssistantMessage) {
-                builder.role(com.alibaba.dashscope.common.Role.ASSISTANT.getValue());
-            } else {
-                builder.role(com.alibaba.dashscope.common.Role.USER.getValue());
-            }
-
-            builder.content(msg.getText());
-            return builder.build();
-        }).collect(Collectors.toList());
-    }
 }

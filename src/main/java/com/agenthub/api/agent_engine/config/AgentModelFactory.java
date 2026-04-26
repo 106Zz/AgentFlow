@@ -2,16 +2,19 @@ package com.agenthub.api.agent_engine.config;
 
 import com.alibaba.cloud.ai.dashscope.chat.DashScopeChatOptions;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
 
 /**
  * Agent 模型工厂 (基于 Spring AI Alibaba)
  * <p>负责创建不同角色的 ChatClient，实现多模型协作 (MoE by Architecture)</p>
  *
  * <p>注意：Spring AI Alibaba 默认不会透传 reasoning_content（思考过程）</p>
- * <p>如需获取思考过程，请使用 {@link DashScopeNativeService}</p>
+ * <p>如需获取思考过程，请使用 {@link LLMService}</p>
  *
  * @author AgentHub
  * @since 2026-02-02
@@ -45,9 +48,19 @@ public class AgentModelFactory {
     public static final double QUERY_REWRITE_TEMPERATURE = 0.7;
 
     /**
+     * 将 DashScope ChatModel 设为 @Primary
+     * <p>解决 DashScope + Ollama 双 ChatModel 共存时的冲突：
+     * ChatClient.Builder 自动注入需要唯一的 ChatModel</p>
+     * <p>所有 AgentModelFactory 创建的 ChatClient 都使用 DashScope ChatModel</p>
+     */
+    @Bean
+    @Primary
+    public ChatModel primaryChatModel(@Qualifier("dashScopeChatModel") ChatModel dashScopeChatModel) {
+        return dashScopeChatModel;
+    }
+
+    /**
      * 1. Worker (打工人): 负责日常对话、工具调用
-     * <p>模型: deepseek-v3.2 (响应快，成本低)</p>
-     * <p>特点: 情商高，指令遵循能力强，适合快速响应</p>
      */
     @Bean("workerChatClient")
     public ChatClient workerChatClient(ChatClient.Builder builder) {
@@ -62,8 +75,6 @@ public class AgentModelFactory {
 
     /**
      * 2. Judge (大法官): 负责合规审计
-     * <p>使用 Spring AI（快速，但无思考过程）</p>
-     * <p>如需深度思考过程，请使用 {@link DashScopeNativeService#deepThink}</p>
      */
     @Bean("judgeChatClient")
     public ChatClient judgeChatClient(ChatClient.Builder builder) {
@@ -78,8 +89,6 @@ public class AgentModelFactory {
 
     /**
      * 3. Reader (阅读者): 负责超长文档阅读
-     * <p>使用 Spring AI（快速，但无思考过程）</p>
-     * <p>如需深度思考过程，请使用 {@link DashScopeNativeService#deepThink}</p>
      */
     @Bean("readerChatClient")
     public ChatClient readerChatClient(ChatClient.Builder builder) {
@@ -93,8 +102,6 @@ public class AgentModelFactory {
 
     /**
      * 4. Intent (意图识别): 负责用户意图分类
-     * <p>模型: qwen-plus (响应快，分类准确)</p>
-     * <p>特点: 低温度设置，确保分类结果稳定一致</p>
      */
     @Bean("intentChatClient")
     public ChatClient intentChatClient(ChatClient.Builder builder) {
@@ -109,8 +116,6 @@ public class AgentModelFactory {
 
     /**
      * 5. QueryRewrite (查询改写): 负责将口语化查询改写为正式表达
-     * <p>模型: qwen-plus (响应快，改写效果好)</p>
-     * <p>特点: 较高温度，增加多样性，覆盖更多改写可能</p>
      */
     @Bean("queryRewriteChatClient")
     public ChatClient queryRewriteChatClient(ChatClient.Builder builder) {
