@@ -50,6 +50,7 @@ public class SysPrompt extends BaseEntity {
     /**
      * 提示词类型
      */
+    @TableField(typeHandler = org.apache.ibatis.type.EnumTypeHandler.class)
     private PromptType promptType;
 
     /**
@@ -65,10 +66,18 @@ public class SysPrompt extends BaseEntity {
     /**
      * 模板类型
      */
+    @TableField(typeHandler = org.apache.ibatis.type.EnumTypeHandler.class)
     private TemplateType templateType;
 
     /**
      * 分类 ID
+     * <p>关联 sys_prompt_category 表，对应关系见 {@link com.agenthub.api.prompt.enums.PromptType}</p>
+     * <ul>
+     *   <li>1 = Router 层, 2 = System 层, 8 = RAG 系统(子分类)</li>
+     *   <li>3 = Skill 层, 9 = 商务审查(子分类), 10 = 合规参数提取(子分类)</li>
+     *   <li>4 = Tool 层, 11 = 知识库工具(子分类), 12 = 计算工具(子分类)</li>
+     *   <li>5 = Worker 层, 6 = FewShot 示例, 7 = 后处理提示词</li>
+     * </ul>
      */
     private Long categoryId;
 
@@ -100,6 +109,7 @@ public class SysPrompt extends BaseEntity {
     /**
      * 作用域
      */
+    @TableField(typeHandler = org.apache.ibatis.type.EnumTypeHandler.class)
     private Scope scope;
 
     /**

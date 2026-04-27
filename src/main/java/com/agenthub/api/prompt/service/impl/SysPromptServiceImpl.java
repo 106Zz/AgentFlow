@@ -187,8 +187,9 @@ public class SysPromptServiceImpl extends ServiceImpl<SysPromptMapper, SysPrompt
         // 租户查询
         wrapper.eq(request.getTenantId() != null, SysPrompt::getTenantId, request.getTenantId());
         // 作用域查询
-        wrapper.eq(StrUtil.isNotBlank(request.getScope()), SysPrompt::getScope,
-                Scope.valueOf(request.getScope()));
+        if (StrUtil.isNotBlank(request.getScope())) {
+            wrapper.eq(SysPrompt::getScope, Scope.valueOf(request.getScope()));
+        }
 
         wrapper.eq(SysPrompt::getDelFlag, 0);
         wrapper.orderByDesc(SysPrompt::getPriority).orderByDesc(SysPrompt::getCreateTime);
@@ -522,14 +523,14 @@ public class SysPromptServiceImpl extends ServiceImpl<SysPromptMapper, SysPrompt
                 .id(prompt.getId())
                 .promptCode(prompt.getPromptCode())
                 .promptName(prompt.getPromptName())
-                .promptType(prompt.getPromptType().name())
+                .promptType(prompt.getPromptType() != null ? prompt.getPromptType().name() : null)
                 .template(extractTemplate(prompt.getContent()))
                 .content(prompt.getContent())
-                .templateType(prompt.getTemplateType().name())
+                .templateType(prompt.getTemplateType() != null ? prompt.getTemplateType().name() : null)
                 .version(prompt.getVersion())
                 .isActive(prompt.getIsActive())
                 .isLocked(prompt.getIsLocked())
-                .scope(prompt.getScope().name())
+                .scope(prompt.getScope() != null ? prompt.getScope().name() : null)
                 .priority(prompt.getPriority())
                 .createTime(prompt.getCreateTime())
                 .updateTime(prompt.getUpdateTime())
