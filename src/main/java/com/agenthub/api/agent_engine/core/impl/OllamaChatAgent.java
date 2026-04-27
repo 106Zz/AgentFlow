@@ -8,8 +8,8 @@ import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 
 /**
- * DeepSeekChatAgent - 一个基于 DeepSeek 模型的聊天代理实现
- * <p>V3.0: 逻辑重构为单次执行流程，实现了 "意图识别 → 预检索 → LLM → Judge" 单次通过</p>
+ * 本地模型聊天代理（双模型路由版）
+ * <p>V4.0: 双模型路由，KB_QA 走微调模型，CHAT 走基座模型</p>
  *
  * <h3>执行流程：</h3>
  * <pre>
@@ -17,14 +17,15 @@ import reactor.core.publisher.Flux;
  * │  1. 意图识别 (IntentRecognition)                                    │
  * │     └─ 识别用户意图: KB_QA / CHAT / UNKNOWN                       │
  * ├─────────────────────────────────────────────────────────────────────┤
- * │  2. 预检索 (PreRetrieval) - 仅 KB_QA 且高置信度                       │
+ * │  2. 预检索 (PreRetrieval) - 仅 KB_QA                                │
  * │     └─ 调用 knowledge_search → 获取 EvidenceBlock                  │
  * ├─────────────────────────────────────────────────────────────────────┤
- * │  3. LLM 生成 (Stream)                                               │
- * │     └─ 流式输出思考过程 + 最终回答                                   │
+ * │  3. LLM 生成 (Stream) - 按意图分流模型                              │
+ * │     ├─ KB_QA → 微调模型 (qwen3.5-agenthub) + knowledge_search     │
+ * │     └─ CHAT → 基座模型 (qwen3.5) + 其他工具                        │
  * ├─────────────────────────────────────────────────────────────────────┤
  * │  4. 保存记忆 (SaveMemory)                                           │
- * │     └─ 保存 User + Assistant 到 sys_ai_memory (滑动窗口)              │
+ * │     └─ 保存 User + Assistant 到 sys_ai_memory (滑动窗口)            │
  * ├─────────────────────────────────────────────────────────────────────┤
  * │  5. Judge 审计 (Async) - 不阻塞响应                                 │
  * │     └─ 异步评估回答质量，用于事后分析                               │
@@ -33,19 +34,19 @@ import reactor.core.publisher.Flux;
  */
 @Slf4j
 @Service
-public class DeepSeekChatAgent implements ChatAgent {
+public class OllamaChatAgent implements ChatAgent {
 
     // ==================== 依赖注入组件 ====================
 
     private final SinglePassExecutor singlePassExecutor;
 
-    public DeepSeekChatAgent(SinglePassExecutor singlePassExecutor) {
+    public OllamaChatAgent(SinglePassExecutor singlePassExecutor) {
         this.singlePassExecutor = singlePassExecutor;
     }
 
     @Override
     public Flux<String> stream(AgentContext context) {
-        log.info("[Agent] Delegating to SinglePassExecutor... Session: {}", context.getSessionId());
+        log.info("[Agent] Delegating to SinglePassExecutor (dual-model routing)... Session: {}", context.getSessionId());
         return singlePassExecutor.executeStream(context);
     }
 }

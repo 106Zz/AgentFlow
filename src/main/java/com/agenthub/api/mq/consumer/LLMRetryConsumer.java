@@ -30,7 +30,6 @@ import java.util.Map;
 public class LLMRetryConsumer {
 
     private final IntentRecognitionService intentRecognitionService;
-    private final SinglePassExecutor singlePassExecutor;
     private final LLMRetryProducer producer;
 
     /**

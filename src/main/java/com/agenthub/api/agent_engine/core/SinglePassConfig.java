@@ -11,7 +11,6 @@ import com.agenthub.api.prompt.service.ICaseSnapshotService;
 import com.agenthub.api.prompt.service.ISysPromptService;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.memory.ChatMemoryRepository;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -29,7 +28,6 @@ public class SinglePassConfig {
 
     @Bean
     public SinglePassExecutor singlePassExecutor(
-            @Qualifier("workerChatClient") ChatClient workerClient,
             IntentRecognitionService intentRecognition,
             PowerKnowledgeService powerKnowledgeService,
             ToolRegistry toolRegistry,
@@ -43,9 +41,9 @@ public class SinglePassConfig {
             LLMCacheService llmCacheService,
             @Qualifier("judgeExecutor") Executor judgeExecutor,
             @Qualifier("agentWorkerExecutor") Executor agentWorkerExecutor,
-            @Value("${app.llm.worker-model:deepseek-v3.2}") String workerModel) {
+            @Value("${app.llm.base-model:qwen3.5:latest}") String baseModel,
+            @Value("${app.llm.finetuned-model:qwen3.5-agenthub:latest}") String finetunedModel) {
         return new SinglePassExecutor(
-                workerClient,
                 intentRecognition,
                 powerKnowledgeService,
                 toolRegistry,
@@ -59,7 +57,8 @@ public class SinglePassConfig {
                 llmCacheService,
                 judgeExecutor,
                 agentWorkerExecutor,
-                workerModel
+                baseModel,
+                finetunedModel
         );
     }
 }

@@ -90,8 +90,8 @@ public class CaseSnapshot extends BaseEntity {
     /**
      * 模型配置
      * {
-     *   "provider": "dashscope",
-     *   "name": "deepseek-v3.2",
+     *   "provider": "ollama",
+     *   "name": "qwen3.5:latest | qwen3.5-agenthub:latest",
      *   "parameters": {...}
      * }
      */

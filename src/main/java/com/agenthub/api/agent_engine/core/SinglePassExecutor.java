@@ -17,7 +17,6 @@ import com.agenthub.api.prompt.service.ICaseSnapshotService;
 import com.agenthub.api.prompt.service.ISysPromptService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.memory.ChatMemoryRepository;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
@@ -33,8 +32,14 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 
 /**
- * 单次执行器
- * <p>实现 "意图识别 → 预检索 → LLM输出 → Judge事后审计" 的单次流程</p>
+ * 单次执行器（双模型路由版）
+ * <p>实现 "意图识别 → 预检索 → 模型分流 → LLM输出 → Judge事后审计" 的单次流程</p>
+ *
+ * <h3>模型分流策略：</h3>
+ * <ul>
+ *   <li>KB_QA → 微调模型 (qwen3.5-agenthub) + 只给 knowledge_search 工具</li>
+ *   <li>CHAT → 基座模型 (qwen3.5) + 给除 knowledge_search 外的所有工具</li>
+ * </ul>
  *
  * <h3>执行流程：</h3>
  * <pre>
@@ -51,8 +56,9 @@ import java.util.concurrent.Executor;
  * │     ├─ EvidenceMessage: 证据文本（GSC 结构化+压缩）                  │
  * │     └─ UserMessage: 用户当前问题                                    │
  * ├─────────────────────────────────────────────────────────────────────┤
- * │  4. LLM 生成 (Stream)                                               │
- * │     └─ 流式输出思考过程 + 最终回答                                   │
+ * │  4. LLM 生成 (Stream) - 按意图分流模型                              │
+ * │     ├─ KB_QA → 微调模型 + knowledge_search                         │
+ * │     └─ CHAT → 基座模型 + 其他工具                                   │
  * ├─────────────────────────────────────────────────────────────────────┤
  * │  5. 保存记忆 (SaveMemory)                                           │
  * │     └─ 保存 User + Assistant → sys_ai_memory                        │
@@ -70,7 +76,6 @@ public class SinglePassExecutor {
 
     // ==================== 依赖服务 ====================
 
-    private final ChatClient workerClient;
     private final IntentRecognitionService intentRecognition;
     private final PowerKnowledgeService powerKnowledgeService;
     private final ToolRegistry toolRegistry;
@@ -95,14 +100,23 @@ public class SinglePassExecutor {
      */
     private static final int MEMORY_WINDOW_SIZE = 5;
 
-    private static final String SYSTEM_PROMPT_CODE = "SYSTEM-RAG-LITE";
+    /** KB_QA 知识库问答提示词 */
+    private static final String SYSTEM_PROMPT_KBQA = "SYSTEM-RAG-LITE";
+
+    /** CHAT 闲聊提示词 */
+    private static final String SYSTEM_PROMPT_CHAT = "SYSTEM-CHAT-v1.0";
+
+    // ==================== 双模型配置 ====================
+
+    /** 基座模型：CHAT 闲聊 + 通用工具调用 */
+    private final String baseModel;
+
+    /** 微调模型：KB_QA 知识库问答 */
+    private final String finetunedModel;
 
     // ==================== 构造器 ====================
 
-    private final String workerModel;
-
     public SinglePassExecutor(
-            ChatClient workerClient,
             IntentRecognitionService intentRecognition,
             PowerKnowledgeService powerKnowledgeService,
             ToolRegistry toolRegistry,
@@ -116,8 +130,8 @@ public class SinglePassExecutor {
             LLMCacheService llmCacheService,
             Executor judgeExecutor,
             Executor agentWorkerExecutor,
-            String workerModel) {
-        this.workerClient = workerClient;
+            String baseModel,
+            String finetunedModel) {
         this.intentRecognition = intentRecognition;
         this.powerKnowledgeService = powerKnowledgeService;
         this.toolRegistry = toolRegistry;
@@ -131,7 +145,8 @@ public class SinglePassExecutor {
         this.llmCacheService = llmCacheService;
         this.judgeExecutor = judgeExecutor;
         this.agentWorkerExecutor = agentWorkerExecutor;
-        this.workerModel = workerModel;
+        this.baseModel = baseModel;
+        this.finetunedModel = finetunedModel;
     }
 
     // ==================== 核心执行方法 ====================
@@ -524,7 +539,8 @@ public class SinglePassExecutor {
         final boolean[] newState = new boolean[]{false, false};
         final StringBuilder secondRoundAnswer = new StringBuilder();
 
-        llmService.deepThinkStream(workerModel, newMessages, List.of(), new StreamCallback() {
+        String secondRoundModel = context.getIntent() == IntentType.KB_QA ? finetunedModel : baseModel;
+        llmService.deepThinkStream(secondRoundModel, newMessages, List.of(), new StreamCallback() {
             @Override
             public void onReasoning(String reasoning) {
                 if (reasoning != null && !reasoning.isEmpty()) {
@@ -577,24 +593,41 @@ public class SinglePassExecutor {
     // ==================== LLM 调用 ====================
 
     /**
-     * 流式 LLM 调用
+     * 流式 LLM 调用（双模型路由）
+     * <p>
+     * 根据意图分流：
+     * <ul>
+     *   <li>KB_QA → 微调模型 + 只给 knowledge_search</li>
+     *   <li>CHAT → 基座模型 + 除 knowledge_search 外的所有工具</li>
+     * </ul>
      */
     private Flux<String> doStreamChat(List<Message> messages, AgentContext context) {
+        String activeModel;
         List<AgentTool> tools;
-        if (context.isPreRetrievalDone()) {
-            tools = List.of();
-            log.debug("[SinglePass] 预检索已完成，不传任何工具给 LLM");
+
+        if (context.getIntent() == IntentType.KB_QA) {
+            activeModel = finetunedModel;
+            if (context.isPreRetrievalDone()) {
+                tools = List.of();
+                log.debug("[SinglePass] KB_QA 预检索已完成，不传工具给微调模型");
+            } else {
+                tools = toolRegistry.getTools(Set.of("knowledge_search"));
+                log.debug("[SinglePass] KB_QA → 微调模型 + knowledge_search, 工具数: {}", tools.size());
+            }
         } else {
-            tools = toolRegistry.getTools(Set.of());
-            log.debug("[SinglePass] 调用 LLM，携带工具数量: {}", tools.size());
+            activeModel = baseModel;
+            tools = toolRegistry.getTools(Set.of("knowledge_search"));  // 排除 knowledge_search
+            log.debug("[SinglePass] CHAT → 基座模型 + 其他工具, 工具数: {}", tools.size());
         }
+
+        final String model = activeModel;
 
         return Flux.create(sink -> {
             final boolean[] state = new boolean[]{false, false};
             final List<ToolCall> pendingToolCalls = new ArrayList<>();
             final boolean[] toolCallTriggered = new boolean[]{false};
 
-            llmService.deepThinkStream(workerModel, messages, tools, new StreamCallback() {
+            llmService.deepThinkStream(model, messages, tools, new StreamCallback() {
                 @Override
                 public void onReasoning(String reasoning) {
                     if (reasoning != null && !reasoning.isEmpty()) {
@@ -836,11 +869,18 @@ public class SinglePassExecutor {
 
     private String buildSystemPrompt(AgentContext context) {
         try {
+            String promptCode;
+            if (context.getIntent() == IntentType.KB_QA) {
+                promptCode = SYSTEM_PROMPT_KBQA;
+            } else {
+                promptCode = SYSTEM_PROMPT_CHAT;
+            }
+
             String toolsDesc = "";
             Map<String, Object> vars = new HashMap<>();
             vars.put("tools_desc", toolsDesc);
 
-            String systemPromptText = sysPromptService.render(SYSTEM_PROMPT_CODE, vars);
+            String systemPromptText = sysPromptService.render(promptCode, vars);
 
             if (systemPromptText != null && !systemPromptText.isEmpty()) {
                 return systemPromptText;
