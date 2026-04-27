@@ -1,6 +1,6 @@
 package com.agenthub.api.agent_engine.core;
 
-import com.agenthub.api.agent_engine.config.DashScopeNativeService;
+import com.agenthub.api.agent_engine.config.LLMService;
 import com.agenthub.api.agent_engine.service.IntentRecognitionService;
 import com.agenthub.api.ai.service.PowerKnowledgeService;
 import com.agenthub.api.ai.service.gssc.GSSCService;
@@ -10,7 +10,7 @@ import com.agenthub.api.agent_engine.capability.ToolRegistry;
 import com.agenthub.api.prompt.service.ICaseSnapshotService;
 import com.agenthub.api.prompt.service.ISysPromptService;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.ai.chat.memory.ChatMemoryRepository;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -28,7 +28,6 @@ public class SinglePassConfig {
 
     @Bean
     public SinglePassExecutor singlePassExecutor(
-            @Qualifier("workerChatClient") ChatClient workerClient,
             IntentRecognitionService intentRecognition,
             PowerKnowledgeService powerKnowledgeService,
             ToolRegistry toolRegistry,
@@ -37,13 +36,14 @@ public class SinglePassConfig {
             ISysPromptService sysPromptService,
             ICaseSnapshotService caseSnapshotService,
             com.fasterxml.jackson.databind.ObjectMapper objectMapper,
-            DashScopeNativeService nativeService,
+            LLMService llmService,
             GSSCService gscService,
             LLMCacheService llmCacheService,
             @Qualifier("judgeExecutor") Executor judgeExecutor,
-            @Qualifier("agentWorkerExecutor") Executor agentWorkerExecutor) {
+            @Qualifier("agentWorkerExecutor") Executor agentWorkerExecutor,
+            @Value("${app.llm.base-model:qwen3.5:latest}") String baseModel,
+            @Value("${app.llm.finetuned-model:qwen3.5-agenthub:latest}") String finetunedModel) {
         return new SinglePassExecutor(
-                workerClient,
                 intentRecognition,
                 powerKnowledgeService,
                 toolRegistry,
@@ -52,11 +52,13 @@ public class SinglePassConfig {
                 sysPromptService,
                 caseSnapshotService,
                 objectMapper,
-                nativeService,
+                llmService,
                 gscService,
                 llmCacheService,
                 judgeExecutor,
-                agentWorkerExecutor
+                agentWorkerExecutor,
+                baseModel,
+                finetunedModel
         );
     }
 }

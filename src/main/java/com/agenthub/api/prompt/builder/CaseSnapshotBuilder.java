@@ -376,7 +376,7 @@ public class CaseSnapshotBuilder {
         // 设置默认 model_data（修复 NOT NULL 约束问题）
         if (this.snapshot.getModelData() == null) {
             ObjectNode defaultModelData = objectMapper.createObjectNode();
-            defaultModelData.put("provider", "dashscope");
+            defaultModelData.put("provider", "ollama");
             defaultModelData.put("name", "unknown");
             this.snapshot.setModelData(defaultModelData);
         }

@@ -2,7 +2,22 @@ package com.agenthub.api.prompt.enums;
 
 /**
  * 提示词类型枚举
- * <p>对应 AgentHub v4.0 架构的不同层级</p>
+ * <p>对应 AgentHub v4.0 架构的不同层级，与 {@code sys_prompt_category} 表一一对应：</p>
+ *
+ * <pre>
+ * ROUTER      → id=1  'Router 层'      意图分类、用例分发
+ * SYSTEM      → id=2  'System 层'      RAG 系统级提示、通用后处理规则
+ *   └─ RAG    → id=8  'RAG 系统'       (System 子分类)
+ * SKILL       → id=3  'Skill 层'       从自然语言中提取结构化参数
+ *   ├─ 商务   → id=9  '商务审查'
+ *   └─ 合规   → id=10 '合规参数提取'
+ * TOOL        → id=4  'Tool 层'        Tool 功能描述和使用说明
+ *   ├─ 知识库 → id=11 '知识库工具'
+ *   └─ 计算   → id=12 '计算工具'
+ * WORKER      → id=5  'Worker 层'      工作流编排、任务执行指导
+ * FEWSHOT     → id=6  'FewShot 示例'   少样本学习示例
+ * POST_PROCESS→ id=7  '后处理提示词'   输出格式转换、结果校验
+ * </pre>
  *
  * @author AgentHub
  * @since 2026-01-27

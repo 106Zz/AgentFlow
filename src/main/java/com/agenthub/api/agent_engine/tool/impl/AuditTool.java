@@ -96,7 +96,7 @@ public class AuditTool implements AgentTool {
                             .capturePromptData()
                             .metadata("doc_length", String.valueOf(docLength))
                             .outputData(result != null ? result.toString() : "", duration, null)
-                            .modelData("agent-v2", "deepseek-v3.2", null)
+                            .modelData("agent-v2", "ollama-local", null)
                             .durationMs((int) duration)
                             .requestTime(LocalDateTime.now())
                             .build()

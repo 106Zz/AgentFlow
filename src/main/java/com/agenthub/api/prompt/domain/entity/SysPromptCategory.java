@@ -13,6 +13,24 @@ import java.util.List;
 /**
  * 提示词分类实体
  *
+ * <h3>预置分类体系：</h3>
+ * <pre>
+ * ┌──────────────────────────────────────────────────────────────┐
+ * │ id=1  ROUTER       'Router 层'      (顶级)                   │
+ * │ id=2  SYSTEM       'System 层'      (顶级)                   │
+ * │   └─ id=8  RAG      'RAG 系统'      (子分类)                 │
+ * │ id=3  SKILL        'Skill 层'       (顶级)                   │
+ * │   ├─ id=9  COMMERCIAL  '商务审查'    (子分类)                 │
+ * │   └─ id=10 COMPLIANCE  '合规参数提取' (子分类)                │
+ * │ id=4  TOOL         'Tool 层'        (顶级)                   │
+ * │   ├─ id=11 KNOWLEDGE   '知识库工具'  (子分类)                 │
+ * │   └─ id=12 CALCULATOR  '计算工具'    (子分类)                 │
+ * │ id=5  WORKER       'Worker 层'      (顶级)                   │
+ * │ id=6  FEWSHOT      'FewShot 示例'   (顶级)                   │
+ * │ id=7  POST_PROCESS '后处理提示词'   (顶级)                   │
+ * └──────────────────────────────────────────────────────────────┘
+ * </pre>
+ *
  * @author AgentHub
  * @since 2026-01-26
  */

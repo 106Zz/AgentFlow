@@ -21,9 +21,9 @@ import java.util.regex.Pattern;
  *
  * <h3>识别策略：</h3>
  * <ol>
- *   <li>规则匹配：关键词匹配 (快速，覆盖常见场景)</li>
- *   <li>LLM 分类：规则不确定时调用 LLM (准确，覆盖长尾场景)</li>
- *   <li>降级处理：识别失败时默认走 CHAT 流程</li>
+ *   <li>LLM 分类：qwen-plus 意图识别 (准确，覆盖复杂语义)</li>
+ *   <li>规则兜底：LLM 失败时使用关键词匹配 (快速降级)</li>
+ *   <li>降级处理：均失败时默认走 CHAT 流程</li>
  * </ol>
  *
  * @author AgentHub
@@ -43,31 +43,25 @@ public class IntentRecognitionService {
     private static final String PROMPT_CODE = "ROUTER-INTENT-v1.0";
 
     /**
-     * 广东电力市场相关关键词 + 明确的检索意图关键词 (用于规则匹配)
+     * 知识库检索高置信度关键词 (仅用于 LLM 失败时的兜底规则匹配)
+     * <p>原则：只保留能明确指向「需要查阅具体文档证据」的词，排除语义模糊的通用词</p>
      */
-    private static final List<String> KB_KEYWORDS = List.of(
-            // 电力市场专业术语
+    private static final List<String> KB_STRONG_KEYWORDS = List.of(
+            // 电力市场专业术语（强指向性）
             "电价", "电费", "结算", "考核", "偏差", "市场化", "交易",
             "售电", "购电", "输配电", "政府定价", "输电费",
             "容量电费", "需量电费", "功率因数", "力调", "力率",
             "峰谷平", "分时电价", "尖峰", "低谷", "峰谷",
             "中长期", "现货", "批发", "零售", "辅助服务",
             "调峰", "调频", "备用", "无功", "补偿",
-            // 明确的检索意图关键词 (高优先级)
-            "知识库", "检索", "查询", "搜索", "查找", "文档",
-            "政策", "文件", "规定", "标准", "规则", "办法",
-            "目标", "规划", "发展目标"
+            // 明确的文档查阅意图
+            "知识库", "检索", "文档", "规定", "标准", "规则", "办法"
     );
 
     /**
-     * 关键词匹配高置信度阈值 (2个以上关键词)
+     * 规则兜底置信度（保守，低于 LLM 的判断可信度）
      */
-    private static final double KEYWORD_HIGH_CONFIDENCE = 0.85;
-
-    /**
-     * 单个关键词中等置信度阈值
-     */
-    private static final double KEYWORD_MEDIUM_CONFIDENCE = 0.65;
+    private static final double KEYWORD_FALLBACK_CONFIDENCE = 0.6;
 
     /**
      * 闲聊模式正则
@@ -100,35 +94,36 @@ public class IntentRecognitionService {
 
         log.debug("[Intent] 开始识别: {}", query);
 
-        // 1. 快速规则判断 (关键词匹配)
-        IntentResult ruleResult = checkByRules(query);
-        if (ruleResult != null && ruleResult.isHighConfidence()) {
-            log.info("[Intent] 规则匹配高置信度: intent={}, confidence={}, reasoning={}",
-                    ruleResult.intent(), ruleResult.confidence(), ruleResult.reasoning());
-            return ruleResult;
+        // 1. 快速闲聊判断（无需调 LLM，节省开销）
+        if (isChattyQuery(query)) {
+            log.info("[Intent] 闲聊快速匹配: CHAT");
+            return IntentResult.chat(0.9, "明显的闲聊/问候模式");
         }
 
-        // 2. 中等置信度规则匹配，记录但不直接返回
-        //    如果 LLM 失败，可以降级使用这个结果
-        IntentResult mediumResult = ruleResult;
-
-        // 3. LLM 意图识别
+        // 2. LLM 意图识别（主力，优先走 qwen-plus）
         try {
             IntentResult llmResult = recognizeByLLM(query);
             log.info("[Intent] LLM识别: intent={}, confidence={}, reasoning={}",
                     llmResult.intent(), llmResult.confidence(), llmResult.reasoning());
             return llmResult;
         } catch (Exception e) {
-            log.warn("[Intent] LLM识别失败，降级为规则结果或 CHAT: {}", e.getMessage());
-            if (mediumResult != null) {
-                return mediumResult;
-            }
-            return IntentResult.chat(0.5, "LLM识别失败，降级为 CHAT");
+            log.warn("[Intent] LLM识别失败，使用规则兜底: {}", e.getMessage());
         }
+
+        // 3. 规则兜底（LLM 失败时才走）
+        IntentResult ruleResult = checkByRules(query);
+        if (ruleResult != null) {
+            log.info("[Intent] 规则兜底: intent={}, confidence={}, reasoning={}",
+                    ruleResult.intent(), ruleResult.confidence(), ruleResult.reasoning());
+            return ruleResult;
+        }
+
+        // 4. 均无法判断，默认 CHAT
+        return IntentResult.chat(0.5, "LLM 与规则均未命中，默认 CHAT");
     }
 
     /**
-     * 基于规则的快速判断
+     * 基于规则的兜底判断（仅 LLM 失败时调用）
      *
      * @param query 用户查询
      * @return 意图识别结果，如果无法判断返回 null
@@ -136,39 +131,32 @@ public class IntentRecognitionService {
     private IntentResult checkByRules(String query) {
         String lowerQuery = query.toLowerCase();
 
-        // 1. 检查闲聊模式 → 高置信度 CHAT
-        if (CHAT_PATTERN.matcher(query.trim()).matches()) {
-            return IntentResult.chat(0.9, "明显的闲聊/问候模式");
-        }
-
-        // 2. 精确关键词匹配
-        long matchCount = KB_KEYWORDS.stream()
+        long matchCount = KB_STRONG_KEYWORDS.stream()
                 .filter(keyword -> lowerQuery.contains(keyword))
                 .count();
 
         if (matchCount >= 2) {
-            return IntentResult.kbQa(
-                    KEYWORD_HIGH_CONFIDENCE,
-                    "包含 " + matchCount + " 个知识库关键词: " +
-                            KB_KEYWORDS.stream()
-                                    .filter(lowerQuery::contains)
-                                    .findFirst()
-                                    .orElse("") + " 等"
-            );
-        }
-
-        if (matchCount == 1) {
-            String matchedKeyword = KB_KEYWORDS.stream()
+            String matchedKeyword = KB_STRONG_KEYWORDS.stream()
                     .filter(lowerQuery::contains)
                     .findFirst()
                     .orElse("");
             return IntentResult.kbQa(
-                    KEYWORD_MEDIUM_CONFIDENCE,
-                    "包含 1 个知识库关键词: " + matchedKeyword + "，置信度中等"
+                    KEYWORD_FALLBACK_CONFIDENCE,
+                    "[规则兜底] 包含 " + matchCount + " 个知识库关键词: " + matchedKeyword + " 等"
             );
         }
 
-        // 3. 未匹配到关键词
+        if (matchCount == 1) {
+            String matchedKeyword = KB_STRONG_KEYWORDS.stream()
+                    .filter(lowerQuery::contains)
+                    .findFirst()
+                    .orElse("");
+            return IntentResult.kbQa(
+                    0.5,
+                    "[规则兜底] 仅包含 1 个知识库关键词: " + matchedKeyword
+            );
+        }
+
         return null;
     }
 

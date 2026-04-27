@@ -2,16 +2,16 @@ package com.agenthub.api.agent_engine.config;
 
 import com.alibaba.cloud.ai.dashscope.chat.DashScopeChatOptions;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
 
 /**
- * Agent 模型工厂 (基于 Spring AI Alibaba)
- * <p>负责创建不同角色的 ChatClient，实现多模型协作 (MoE by Architecture)</p>
- *
- * <p>注意：Spring AI Alibaba 默认不会透传 reasoning_content（思考过程）</p>
- * <p>如需获取思考过程，请使用 {@link DashScopeNativeService}</p>
+ * Agent 模型工厂
+ * <p>负责集中管理 DashScope 辅助角色的模型配置和 ChatClient Bean</p>
+ * <p>Worker 角色已切换为本地 Ollama 双模型（基座+微调），通过配置文件 + LLMService 调用</p>
  *
  * @author AgentHub
  * @since 2026-02-02
@@ -19,14 +19,7 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 public class AgentModelFactory {
 
-    @Value("${spring.ai.dashscope.api-key}")
-    private String apiKey;
-
-    // ========== 模型配置常量 ==========
-
-    /** Worker 模型配置 */
-    public static final String WORKER_MODEL = "deepseek-v3.2";
-    public static final double WORKER_TEMPERATURE = 0.7;
+    // ========== DashScope 云端模型配置 ==========
 
     /** Judge 模型配置 */
     public static final String JUDGE_MODEL = "glm-4.7";
@@ -45,80 +38,68 @@ public class AgentModelFactory {
     public static final double QUERY_REWRITE_TEMPERATURE = 0.7;
 
     /**
-     * 1. Worker (打工人): 负责日常对话、工具调用
-     * <p>模型: deepseek-v3.2 (响应快，成本低)</p>
-     * <p>特点: 情商高，指令遵循能力强，适合快速响应</p>
+     * 将 DashScope ChatModel 设为 @Primary
+     * <p>解决 DashScope + Ollama 双 ChatModel 共存时的冲突：
+     * ChatClient.Builder 自动注入需要唯一的 ChatModel</p>
+     * <p>所有 AgentModelFactory 创建的 ChatClient 都使用 DashScope ChatModel</p>
      */
-    @Bean("workerChatClient")
-    public ChatClient workerChatClient(ChatClient.Builder builder) {
-        return builder
-                .defaultSystem("你是一个电力行业的智能助手，能够协助用户处理业务、查询数据和进行计算。")
-                .defaultOptions(DashScopeChatOptions.builder()
-                        .withModel("deepseek-v3.2")
-                        .withTemperature(0.7)
-                        .build())
-                .build();
+    @Bean
+    @Primary
+    public ChatModel primaryChatModel(@Qualifier("dashScopeChatModel") ChatModel dashScopeChatModel) {
+        return dashScopeChatModel;
     }
 
     /**
-     * 2. Judge (大法官): 负责合规审计
-     * <p>使用 Spring AI（快速，但无思考过程）</p>
-     * <p>如需深度思考过程，请使用 {@link DashScopeNativeService#deepThink}</p>
+     * 1. Judge (大法官): 负责合规审计
      */
     @Bean("judgeChatClient")
     public ChatClient judgeChatClient(ChatClient.Builder builder) {
         return builder
                 .defaultSystem("你是一个冷血的合规审计员。你的任务是基于给定的【事实依据】审查【回答内容】的准确性。")
                 .defaultOptions(DashScopeChatOptions.builder()
-                        .withModel("glm-4.7")
-                        .withTemperature(0.1)
+                        .withModel(JUDGE_MODEL)
+                        .withTemperature(JUDGE_TEMPERATURE)
                         .build())
                 .build();
     }
 
     /**
-     * 3. Reader (阅读者): 负责超长文档阅读
-     * <p>使用 Spring AI（快速，但无思考过程）</p>
-     * <p>如需深度思考过程，请使用 {@link DashScopeNativeService#deepThink}</p>
+     * Reader (阅读者): 负责超长文档阅读
      */
     @Bean("readerChatClient")
     public ChatClient readerChatClient(ChatClient.Builder builder) {
         return builder
                 .defaultOptions(DashScopeChatOptions.builder()
-                        .withModel("kimi-k2-thinking")
-                        .withTemperature(0.2)
+                        .withModel(READER_MODEL)
+                        .withTemperature(READER_TEMPERATURE)
                         .build())
                 .build();
     }
 
     /**
-     * 4. Intent (意图识别): 负责用户意图分类
-     * <p>模型: qwen-plus (响应快，分类准确)</p>
-     * <p>特点: 低温度设置，确保分类结果稳定一致</p>
+     * Intent (意图识别): 负责用户意图分类
      */
     @Bean("intentChatClient")
     public ChatClient intentChatClient(ChatClient.Builder builder) {
         return builder
                 .defaultSystem("你是一个意图分类助手。负责判断用户问题是闲聊(CHAT)还是需要查询知识库(KB_QA)。")
                 .defaultOptions(DashScopeChatOptions.builder()
-                        .withModel("qwen-plus")
-                        .withTemperature(0.1)
+                        .withModel(INTENT_MODEL)
+                        .withTemperature(INTENT_TEMPERATURE)
                         .build())
                 .build();
     }
 
     /**
-     * 5. QueryRewrite (查询改写): 负责将口语化查询改写为正式表达
-     * <p>模型: qwen-plus (响应快，改写效果好)</p>
-     * <p>特点: 较高温度，增加多样性，覆盖更多改写可能</p>
+     * QueryRewrite (查询改写): 负责将口语化查询改写为正式表达
      */
     @Bean("queryRewriteChatClient")
     public ChatClient queryRewriteChatClient(ChatClient.Builder builder) {
         return builder
                 .defaultSystem("你是一个查询改写专家，负责将用户的口语化查询改写为更适合知识库检索的正式表达。")
                 .defaultOptions(DashScopeChatOptions.builder()
-                        .withModel("qwen-plus")
-                        .withTemperature(0.7)
+                        .withModel(QUERY_REWRITE_MODEL)
+                        .withTemperature(QUERY_REWRITE_TEMPERATURE)
                         .build())
                 .build();
     }
