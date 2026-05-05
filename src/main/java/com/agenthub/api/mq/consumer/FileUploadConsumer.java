@@ -4,6 +4,7 @@ import com.agenthub.api.ai.service.impl.DocumentProcessServiceImpl;
 import com.agenthub.api.common.utils.OssUtils;
 import com.agenthub.api.framework.sse.KnowledgeStatusNotifier;
 import com.agenthub.api.knowledge.domain.KnowledgeBase;
+import com.agenthub.api.knowledge.domain.ProcessResult;
 import com.agenthub.api.knowledge.service.IKnowledgeBaseService;
 import com.agenthub.api.mq.config.RabbitMQConfig;
 import com.agenthub.api.mq.domain.FileUploadMessage;
@@ -21,6 +22,9 @@ import java.io.File;
 /**
  * 文件上传消费者
  * 处理异步文件上传和文档处理流程
+ * <p>
+ * v5.0 - 支持 PARTIAL 状态（部分页面 OCR 失败）
+ * </p>
  */
 @Slf4j
 @Component
@@ -36,13 +40,13 @@ public class FileUploadConsumer {
     /**
      * 监听文件上传队列
      *
-     * 处理流程（v4.3 修复）：
+     * 处理流程（v5.0）：
      * 1. 从数据库获取知识库记录
      * 2. 读取本地临时文件
-     * 3. 立即上传到 OSS（并行：前端已保存到临时文件）
+     * 3. 立即上传到 OSS
      * 4. 更新数据库 filePath 为 OSS 路径
-     * 5. 执行文档处理（直接从 OSS InputStream 读取，不下载！）
-     * 6. 处理成功后删除临时文件
+     * 5. 执行文档处理，返回 ProcessResult
+     * 6. 根据结果判断 SUCCESS / PARTIAL / FAILED
      * 7. 更新状态并通过 SSE 通知
      */
     @RabbitListener(queues = RabbitMQConfig.FILE_UPLOAD_QUEUE,
@@ -74,7 +78,7 @@ public class FileUploadConsumer {
             }
             log.info("【后台上传】临时文件存在，大小: {} bytes", tempFile.length());
 
-            // 2. 立即上传到 OSS（与前端临时文件保存并行）
+            // 2. 立即上传到 OSS
             String ossPath = ossUtils.uploadFile(tempFile,
                     message.getIsAdmin() ? "knowledge/public/" : "knowledge/user/" + message.getUserId() + "/");
             log.info("【后台上传】文件已上传到 OSS: {}", ossPath);
@@ -83,20 +87,32 @@ public class FileUploadConsumer {
             knowledge.setFilePath(ossPath);
             knowledgeBaseService.updateById(knowledge);
 
-            // 4. 执行文档处理（直接从 OSS InputStream 读取，不下载临时文件）
-            int vectorCount = documentProcessService.processDocumentCore(knowledge);
+            // 4. 执行文档处理
+            ProcessResult result = documentProcessService.processDocumentCore(knowledge);
 
-            // 5. 更新状态为已完成
-            updateStatusWithRetry(knowledge, "3", vectorCount);
-            statusNotifier.notifyCompleted(message.getUserId(), knowledge.getId(), vectorCount);
+            // 5. 根据处理结果判断最终状态
+            String finalStatus = result.getFinalStatus();
+            updateStatusWithRetry(knowledge, finalStatus, result.getChunkCount());
+
+            // 6. 写入页面级统计信息
+            if (!result.isNonPdf() && result.getTotalPages() > 0) {
+                updatePageStatistics(knowledge, result);
+            }
+
+            // 7. 推送状态通知
+            if ("5".equals(finalStatus)) {
+                statusNotifier.notifyPartial(message.getUserId(), knowledge.getId(),
+                        result.getChunkCount(), result.getFailedPages(), result.getFailedPageNums());
+            } else {
+                statusNotifier.notifyCompleted(message.getUserId(), knowledge.getId(), result.getChunkCount());
+            }
 
             // 成功后 ACK
             channel.basicAck(deliveryTag, false);
-
             processingSuccess = true;
 
-            log.info("【RabbitMQ】文件上传处理成功，知识库ID: {}, 向量数量: {}",
-                    message.getKnowledgeId(), vectorCount);
+            log.info("【RabbitMQ】文件上传处理完成，知识库ID: {}, 状态: {}, 向量数量: {}",
+                    message.getKnowledgeId(), finalStatus, result.getChunkCount());
 
         } catch (Exception e) {
             log.error("【RabbitMQ】文件上传处理失败: {}", e.getMessage(), e);
@@ -137,7 +153,6 @@ public class FileUploadConsumer {
             }
         } finally {
             // v4.3 - 只有处理成功才删除临时文件
-            // 如果处理失败，保留临时文件以便手动重试时使用
             if (processingSuccess) {
                 cleanupTempFile(tempFile);
             } else {
@@ -174,7 +189,6 @@ public class FileUploadConsumer {
         }
 
         String lowerMsg = message.toLowerCase();
-        // 以下错误类型可以重试
         if (lowerMsg.contains("rate limit") || lowerMsg.contains("429") ||
             lowerMsg.contains("timeout") || lowerMsg.contains("connection") ||
             lowerMsg.contains("network") || lowerMsg.contains("database") ||
@@ -182,13 +196,35 @@ public class FileUploadConsumer {
             return true;
         }
 
-        // 解析错误通常不可重试
         if (lowerMsg.contains("parse") || lowerMsg.contains("corrupted") ||
             lowerMsg.contains("invalid format")) {
             return false;
         }
 
-        return true; // 默认可重试
+        return true;
+    }
+
+    /**
+     * 更新页面级统计信息
+     */
+    private void updatePageStatistics(KnowledgeBase knowledge, ProcessResult result) {
+        try {
+            knowledge.setTotalPages(result.getTotalPages());
+            knowledge.setSuccessPages(result.getSuccessPages());
+            knowledge.setFailedPages(result.getFailedPages());
+            if (result.getFailedPageNums() != null && !result.getFailedPageNums().isEmpty()) {
+                knowledge.setFailedPageNums(result.getFailedPageNums().stream()
+                        .map(String::valueOf)
+                        .reduce((a, b) -> a + "," + b)
+                        .orElse(""));
+            }
+            if (result.getFailureSummary() != null) {
+                knowledge.setFailureSummary(result.getFailureSummary());
+            }
+            knowledgeBaseService.updateById(knowledge);
+        } catch (Exception e) {
+            log.warn("【页面统计更新失败】知识库 ID: {}", knowledge.getId(), e);
+        }
     }
 
     /**

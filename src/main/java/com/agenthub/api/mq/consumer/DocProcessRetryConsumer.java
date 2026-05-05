@@ -3,6 +3,7 @@ package com.agenthub.api.mq.consumer;
 import com.agenthub.api.ai.service.impl.DocumentProcessServiceImpl;
 import com.agenthub.api.framework.sse.KnowledgeStatusNotifier;
 import com.agenthub.api.knowledge.domain.KnowledgeBase;
+import com.agenthub.api.knowledge.domain.ProcessResult;
 import com.agenthub.api.knowledge.service.IKnowledgeBaseService;
 import com.agenthub.api.mq.config.RabbitMQConfig;
 import com.agenthub.api.mq.domain.DocProcessRetryMessage;
@@ -54,17 +55,40 @@ public class DocProcessRetryConsumer {
       statusNotifier.notifyProcessing(knowledge.getUserId(), message.getKnowledgeId());
 
       // 执行文档处理（复用核心逻辑）
-      int vectorCount = documentProcessService.processDocumentCore(knowledge);
+      ProcessResult result = documentProcessService.processDocumentCore(knowledge);
 
-      // 更新状态为已完成（带重试）
-      updateStatusWithRetry(knowledge, "3", vectorCount);
-      statusNotifier.notifyCompleted(knowledge.getUserId(), knowledge.getId(), vectorCount);
+      // 根据处理结果判断最终状态
+      String finalStatus = result.getFinalStatus();
+      updateStatusWithRetry(knowledge, finalStatus, result.getChunkCount());
+
+      // 写入页面级统计信息
+      if (!result.isNonPdf() && result.getTotalPages() > 0) {
+        knowledge.setTotalPages(result.getTotalPages());
+        knowledge.setSuccessPages(result.getSuccessPages());
+        knowledge.setFailedPages(result.getFailedPages());
+        if (result.getFailedPageNums() != null && !result.getFailedPageNums().isEmpty()) {
+          knowledge.setFailedPageNums(result.getFailedPageNums().stream()
+                  .map(String::valueOf).reduce((a, b) -> a + "," + b).orElse(""));
+        }
+        if (result.getFailureSummary() != null) {
+          knowledge.setFailureSummary(result.getFailureSummary());
+        }
+        knowledgeBaseService.updateById(knowledge);
+      }
+
+      // 推送状态通知
+      if ("5".equals(finalStatus)) {
+        statusNotifier.notifyPartial(knowledge.getUserId(), knowledge.getId(),
+                result.getChunkCount(), result.getFailedPages(), result.getFailedPageNums());
+      } else {
+        statusNotifier.notifyCompleted(knowledge.getUserId(), knowledge.getId(), result.getChunkCount());
+      }
 
       // 成功后 ACK
       channel.basicAck(deliveryTag, false);
 
-      log.info("【RabbitMQ】文档处理重试成功，知识库ID: {}, 向量数量: {}",
-          message.getKnowledgeId(), vectorCount);
+      log.info("【RabbitMQ】文档处理重试完成，知识库ID: {}, 状态: {}, 向量数量: {}",
+          message.getKnowledgeId(), finalStatus, result.getChunkCount());
 
     } catch (Exception e) {
       log.error("【RabbitMQ】文档处理重试失败: {}", e.getMessage(), e);

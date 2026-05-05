@@ -82,6 +82,7 @@ public class KnowledgeBase extends BaseEntity {
      *   <li>2 - 处理中：正在分词/向量化中</li>
      *   <li>3 - 成功：文档处理完成，向量已入库</li>
      *   <li>4 - 失败：处理失败，可重新触发处理</li>
+     *   <li>5 - 部分成功：部分页面 OCR 失败，存在内容缺失</li>
      * </ul>
      */
     private String vectorStatus;
@@ -90,6 +91,31 @@ public class KnowledgeBase extends BaseEntity {
      * 向量化后的文档块数量
      */
     private Integer vectorCount;
+
+    /**
+     * PDF 总页数（非 PDF 文件为 null）
+     */
+    private Integer totalPages;
+
+    /**
+     * 成功处理页数
+     */
+    private Integer successPages;
+
+    /**
+     * 失败页数
+     */
+    private Integer failedPages;
+
+    /**
+     * 失败页码，逗号分隔，例如 "3,8,10"
+     */
+    private String failedPageNums;
+
+    /**
+     * 失败摘要
+     */
+    private String failureSummary;
 
     /**
      * 所属用户ID（0表示全局知识库）

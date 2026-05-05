@@ -19,8 +19,8 @@ spring:
   # 文件上传配置
   servlet:
     multipart:
-      max-file-size: 100MB
-      max-request-size: 100MB
+      max-file-size: 200MB
+      max-request-size: 300MB
       enabled: true
 
 server:
@@ -80,10 +80,21 @@ logging:
   level:
     com.agenthub: debug
     org.springframework.security: debug
+    org.apache.pdfbox.contentstream.PDFStreamEngine: error
+    org.apache.pdfbox.pdmodel.graphics.color: error
+    org.apache.pdfbox.filter: error
     # MyBatis SQL 日志关闭（只在需要时开启）
     com.agenthub.api.*.mapper: warn
     com.baomidou.mybatisplus: warn
     org.apache.ibatis: warn
+
+agenthub:
+  pdf:
+    fallback:
+      enabled: true
+      ghostscript-path: "E:/soft/Ghostscript/gs10.07.0/bin/gswin64c.exe"
+      dpi: 200
+      timeout-seconds: 60
 
 knowledge:
   retrieval:

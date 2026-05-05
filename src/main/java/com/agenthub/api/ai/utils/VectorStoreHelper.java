@@ -3,6 +3,7 @@ package com.agenthub.api.ai.utils;
 import com.agenthub.api.common.utils.OssUtils;
 import com.agenthub.api.knowledge.domain.DeleteResult;
 import com.agenthub.api.knowledge.domain.KnowledgeBase;
+import com.agenthub.api.knowledge.domain.ProcessResult;
 import com.agenthub.api.knowledge.mapper.KnowledgeBaseMapper;
 import com.agenthub.api.search.mapper.VectorStoreDocMapper;
 import com.agenthub.api.search.service.IBm25IndexService;
@@ -25,15 +26,16 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
+import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
+import java.util.*;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Pattern;
 
@@ -77,6 +79,18 @@ public class VectorStoreHelper {
     @Value("${ocr.trigger.min-length:30}")
     private int ocrMinLength;
 
+    @Value("${agenthub.pdf.fallback.enabled:true}")
+    private boolean pdfFallbackEnabled;
+
+    @Value("${agenthub.pdf.fallback.ghostscript-path:gswin64c}")
+    private String ghostscriptPath;
+
+    @Value("${agenthub.pdf.fallback.dpi:200}")
+    private int pdfFallbackDpi;
+
+    @Value("${agenthub.pdf.fallback.timeout-seconds:60}")
+    private long pdfFallbackTimeoutSeconds;
+
     // ==================== 常量定义 ====================
 
     /** 向量存储批次大小（DashScope API 限制最大为 10）*/
@@ -105,6 +119,27 @@ public class VectorStoreHelper {
         private static final String BUSINESS = "BUSINESS";      // 商业/价格
         private static final String TECHNICAL = "TECHNICAL";    // 技术/运行
         private static final String REGULATION = "REGULATION";    // 规则/合规（默认）
+    }
+
+    /**
+     * PDF 解析结果（内部使用）
+     * 封装文档列表和页面级统计
+     */
+    private static class PdfParseResult {
+        final List<Document> documents;
+        final int totalPages;
+        final int successPages;
+        final int failedPages;
+        final List<Integer> failedPageNums;
+
+        PdfParseResult(List<Document> documents, int totalPages, int successPages,
+                       int failedPages, List<Integer> failedPageNums) {
+            this.documents = documents;
+            this.totalPages = totalPages;
+            this.successPages = successPages;
+            this.failedPages = failedPages;
+            this.failedPageNums = failedPageNums;
+        }
     }
 
     // ==================== 中文分块器 ====================
@@ -215,9 +250,9 @@ public class VectorStoreHelper {
      * @param userId        用户ID
      * @param isPublic      是否公开 ("0"=私有, "1"=公开)
      * @param extraMetadata 额外的元数据
-     * @return 切片数量
+     * @return 处理结果
      */
-    public int processAndStoreDocument(MultipartFile file, Long knowledgeId, Long userId,
+    public ProcessResult processAndStoreDocument(MultipartFile file, Long knowledgeId, Long userId,
                                        String isPublic, Map<String, Object> extraMetadata)
             throws IOException {
         String filename = file.getOriginalFilename();
@@ -234,9 +269,9 @@ public class VectorStoreHelper {
      * @param userId        用户ID
      * @param isPublic      是否公开
      * @param extraMetadata 额外的元数据
-     * @return 切片数量
+     * @return 处理结果
      */
-    public int processAndStoreDocument(Resource resource, Long knowledgeId, Long userId,
+    public ProcessResult processAndStoreDocument(Resource resource, Long knowledgeId, Long userId,
                                        String isPublic, Map<String, Object> extraMetadata)
             throws IOException {
         String filename = resource.getFilename();
@@ -258,19 +293,21 @@ public class VectorStoreHelper {
      * @param userId         用户ID
      * @param isPublic       是否公开
      * @param extraMetadata  额外的元数据
-     * @return 切片数量
+     * @return 处理结果（含页面级统计）
      */
-    public int processAndStore(byte[] fileBytes, String filename, long fileSize,
+    public ProcessResult processAndStore(byte[] fileBytes, String filename, long fileSize,
                                 Long knowledgeId, Long userId, String isPublic,
                                 Map<String, Object> extraMetadata) throws IOException {
 
         log.info("【开始处理文档】{} ({}KB)，用户ID: {}", filename, fileSize / 1024, userId);
 
         List<Document> documents = new ArrayList<>();
+        PdfParseResult pdfResult = null;
 
         // 1. 文件解析
         if (filename.toLowerCase().endsWith(".pdf")) {
-            documents = parsePdf(fileBytes);
+            pdfResult = parsePdf(fileBytes);
+            documents = pdfResult.documents;
         } else {
             documents = parseNonPdf(fileBytes, filename);
         }
@@ -289,15 +326,32 @@ public class VectorStoreHelper {
         // 4. 存储向量和构建索引
         storeWithIndex(chunks, knowledgeId, userId);
 
-        return chunks.size();
+        // 5. 构建处理结果
+        ProcessResult result = new ProcessResult();
+        result.setChunkCount(chunks.size());
+
+        if (pdfResult != null) {
+            result.setTotalPages(pdfResult.totalPages);
+            result.setSuccessPages(pdfResult.successPages);
+            result.setFailedPages(pdfResult.failedPages);
+            result.setFailedPageNums(pdfResult.failedPageNums);
+
+            if (!pdfResult.failedPageNums.isEmpty()) {
+                result.setFailureSummary(
+                        "PDF 页面资源不完整，PDFBox 渲染失败，失败页码: " + pdfResult.failedPageNums);
+            }
+        }
+
+        return result;
     }
 
     /**
      * 解析PDF文件（混合模式：文本提取 + OCR）
-     * v4.3 - 页面级并行OCR优化
+     * v5.0 - 返回 PdfParseResult，包含页面级统计
      */
-    private List<Document> parsePdf(byte[] fileBytes) throws IOException {
+    private PdfParseResult parsePdf(byte[] fileBytes) throws IOException {
         List<Document> documents = new ArrayList<>();
+        List<Integer> failedPageNums = Collections.synchronizedList(new ArrayList<>());
 
         try (PDDocument pdfDoc = Loader.loadPDF(fileBytes)) {
             PDFRenderer renderer = new PDFRenderer(pdfDoc);
@@ -309,54 +363,90 @@ public class VectorStoreHelper {
 
             // 第一遍：快速文本提取（串行，很快）
             List<Integer> needOcrPages = new ArrayList<>();
+            int textExtractSuccess = 0;
             for (int i = 0; i < totalPages; i++) {
-                stripper.setStartPage(i + 1);
-                stripper.setEndPage(i + 1);
-                String pageText = stripper.getText(pdfDoc).trim();
+                try {
+                    stripper.setStartPage(i + 1);
+                    stripper.setEndPage(i + 1);
+                    String pageText = stripper.getText(pdfDoc).trim();
 
-                if (pageText.length() > ocrMinLength) {
-                    Document doc = new Document(pageText);
-                    doc.getMetadata().put("page_index", i + 1);
-                    doc.getMetadata().put("ocr_used", false);
-                    documents.add(doc);
-                } else {
+                    if (pageText.length() > ocrMinLength) {
+                        Document doc = new Document(pageText);
+                        doc.getMetadata().put("page_index", i + 1);
+                        doc.getMetadata().put("ocr_used", false);
+                        documents.add(doc);
+                        textExtractSuccess++;
+                    } else {
+                        needOcrPages.add(i);
+                    }
+                } catch (Exception e) {
+                    // 文本提取失败，加入 OCR 队列
+                    log.warn("第 {} 页文本提取失败，将尝试OCR: {}", i + 1, e.getMessage());
                     needOcrPages.add(i);
                 }
             }
 
             // 第二遍：并行OCR处理（慢操作并行化）
+            int ocrSuccess = 0;
             if (!needOcrPages.isEmpty()) {
                 log.info("需要OCR的页面: {} 页，开始并行处理...", needOcrPages.size());
-                List<Document> ocrDocuments = processOcrPagesParallel(renderer, needOcrPages);
-                documents.addAll(ocrDocuments);
+                OcrBatchResult ocrResult = processOcrPagesParallel(fileBytes, renderer, needOcrPages);
+                documents.addAll(ocrResult.documents);
+                ocrSuccess = ocrResult.successCount;
+                failedPageNums.addAll(ocrResult.failedPageNums);
             }
-        }
 
-        return documents;
+            int successPages = textExtractSuccess + ocrSuccess;
+            int failedPages = failedPageNums.size();
+
+            if (failedPages > 0) {
+                log.warn("【PDF解析统计】总页数: {}, 成功: {}, 失败: {}, 失败页码: {}",
+                        totalPages, successPages, failedPages, failedPageNums);
+            } else {
+                log.info("【PDF解析统计】总页数: {}, 全部成功", totalPages);
+            }
+
+            return new PdfParseResult(documents, totalPages, successPages, failedPages, failedPageNums);
+        }
+    }
+
+    /**
+     * OCR 批次处理结果（内部使用）
+     */
+    private static class OcrBatchResult {
+        final List<Document> documents;
+        final int successCount;
+        final List<Integer> failedPageNums;
+
+        OcrBatchResult(List<Document> documents, int successCount, List<Integer> failedPageNums) {
+            this.documents = documents;
+            this.successCount = successCount;
+            this.failedPageNums = failedPageNums;
+        }
     }
 
     /**
      * 并行OCR处理多个页面
-     * 注意：使用 Semaphore 限制并行数，避免资源耗尽
+     * v5.0 - 记录失败页码，返回 OcrBatchResult
      */
-    private List<Document> processOcrPagesParallel(PDFRenderer renderer, List<Integer> pages) {
+    private OcrBatchResult processOcrPagesParallel(byte[] pdfBytes, PDFRenderer renderer, List<Integer> pages) {
         log.info("开始OCR处理，共 {} 页，最大并行数: {}", pages.size(), MAX_PARALLEL_OCR);
-        
+
         AtomicInteger successCount = new AtomicInteger(0);
-        AtomicInteger failCount = new AtomicInteger(0);
-        
+        List<Integer> failedPageNums = Collections.synchronizedList(new ArrayList<>());
+
         List<Document> results = pages.parallelStream()
                 .map(pageIndex -> {
                     try {
                         // 获取信号量许可，阻塞直到可用
                         ocrSemaphore.acquire();
                         try {
-                            log.debug("开始处理第 {} 页 (当前并发: {}/{})", 
-                                pageIndex + 1, 
+                            log.debug("开始处理第 {} 页 (当前并发: {}/{})",
+                                pageIndex + 1,
                                 MAX_PARALLEL_OCR - ocrSemaphore.availablePermits(),
                                 MAX_PARALLEL_OCR);
-                            
-                            BufferedImage image = renderer.renderImage(pageIndex, 2.0f);
+
+                            BufferedImage image = renderPageWithFallback(pdfBytes, renderer, pageIndex);
                             String ocrText = ocrReader.processSingleImage(image);
 
                             if (ocrText != null && !ocrText.isEmpty()) {
@@ -365,22 +455,120 @@ public class VectorStoreHelper {
                                 doc.getMetadata().put("ocr_used", true);
                                 successCount.incrementAndGet();
                                 return doc;
+                            } else {
+                                // OCR 返回空文本
+                                failedPageNums.add(pageIndex + 1);
                             }
                         } finally {
                             // 无论成功失败都要释放许可
                             ocrSemaphore.release();
                         }
                     } catch (Exception e) {
-                        log.error("第 {} 页OCR失败", pageIndex + 1, e);
-                        failCount.incrementAndGet();
+                        log.error("第 {} 页OCR失败: {}", pageIndex + 1, e.getMessage());
+                        failedPageNums.add(pageIndex + 1);
                     }
                     return null;
                 })
-                .filter(doc -> doc != null)
+                .filter(Objects::nonNull)
                 .toList();
-        
-        log.info("OCR处理完成: 成功 {} 页, 失败 {} 页", successCount.get(), failCount.get());
-        return results;
+
+        int failCount = failedPageNums.size();
+        log.info("OCR处理完成: 成功 {} 页, 失败 {} 页, 失败页码: {}",
+                successCount.get(), failCount, failedPageNums);
+
+        return new OcrBatchResult(results, successCount.get(), failedPageNums);
+    }
+
+    /**
+     * 渲染 PDF 页面。优先使用 PDFBox，失败后尝试 Ghostscript 单页渲染。
+     */
+    private BufferedImage renderPageWithFallback(byte[] pdfBytes, PDFRenderer renderer, int pageIndex) throws IOException {
+        try {
+            return renderer.renderImage(pageIndex, 2.0f);
+        } catch (Exception pdfBoxError) {
+            if (!pdfFallbackEnabled) {
+                throw toIOException(pdfBoxError);
+            }
+
+            log.warn("PDFBox 渲染第 {} 页失败，尝试 Ghostscript fallback: {}",
+                    pageIndex + 1, pdfBoxError.getMessage());
+
+            try {
+                return renderPageWithGhostscript(pdfBytes, pageIndex);
+            } catch (Exception fallbackError) {
+                log.warn("Ghostscript fallback 渲染第 {} 页失败: {}", pageIndex + 1, fallbackError.getMessage());
+                throw toIOException(pdfBoxError);
+            }
+        }
+    }
+
+    /**
+     * 使用 Ghostscript 将单页 PDF 渲染为 PNG，再读取为 BufferedImage。
+     * 使用 ProcessBuilder 参数数组，避免 shell 拼接用户输入。
+     */
+    private BufferedImage renderPageWithGhostscript(byte[] pdfBytes, int pageIndex) throws IOException, InterruptedException {
+        Path tempDir = Files.createTempDirectory("agenthub-pdf-fallback-");
+        Path inputPdf = tempDir.resolve("input.pdf");
+        Path outputPng = tempDir.resolve("page-" + (pageIndex + 1) + ".png");
+
+        try {
+            Files.write(inputPdf, pdfBytes);
+
+            List<String> command = new ArrayList<>();
+            command.add(ghostscriptPath);
+            command.add("-dSAFER");
+            command.add("-dBATCH");
+            command.add("-dNOPAUSE");
+            command.add("-sDEVICE=png16m");
+            command.add("-r" + pdfFallbackDpi);
+            command.add("-dFirstPage=" + (pageIndex + 1));
+            command.add("-dLastPage=" + (pageIndex + 1));
+            command.add("-sOutputFile=" + outputPng.toAbsolutePath());
+            command.add(inputPdf.toAbsolutePath().toString());
+
+            Process process = new ProcessBuilder(command)
+                    .redirectErrorStream(true)
+                    .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                    .start();
+
+            boolean finished = process.waitFor(pdfFallbackTimeoutSeconds, TimeUnit.SECONDS);
+            if (!finished) {
+                process.destroyForcibly();
+                throw new IOException("Ghostscript 渲染超时");
+            }
+
+            if (process.exitValue() != 0) {
+                throw new IOException("Ghostscript 退出码: " + process.exitValue());
+            }
+
+            BufferedImage image = ImageIO.read(outputPng.toFile());
+            if (image == null) {
+                throw new IOException("Ghostscript 未生成可读取图片");
+            }
+            return image;
+        } finally {
+            deleteQuietly(outputPng);
+            deleteQuietly(inputPdf);
+            deleteQuietly(tempDir);
+        }
+    }
+
+    private IOException toIOException(Exception e) {
+        if (e instanceof IOException ioException) {
+            return ioException;
+        }
+        return new IOException(e.getMessage(), e);
+    }
+
+    private void deleteQuietly(Path path) {
+        if (path == null) {
+            return;
+        }
+        try {
+            Files.deleteIfExists(path);
+        } catch (IOException e) {
+            log.warn("临时文件清理失败: {}", path);
+        }
     }
 
     /**

@@ -5,10 +5,10 @@ import com.agenthub.api.common.exception.ServiceException;
 import com.agenthub.api.common.utils.OssUtils;
 import com.agenthub.api.framework.sse.KnowledgeStatusNotifier;
 import com.agenthub.api.knowledge.domain.KnowledgeBase;
+import com.agenthub.api.knowledge.domain.ProcessResult;
 import com.agenthub.api.knowledge.service.IKnowledgeBaseService;
 import com.agenthub.api.mq.domain.DocProcessRetryMessage;
 import com.agenthub.api.mq.producer.DocProcessRetryProducer;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
@@ -18,6 +18,7 @@ import org.springframework.stereotype.Service;
 import java.io.File;
 import java.io.FileInputStream;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
@@ -26,10 +27,9 @@ import java.util.concurrent.TimeUnit;
  * 文档处理服务实现
  * 负责从OSS下载文件、解析、向量化
  * <p>
- * v4.1 新增功能：
- * - SSE 实时状态推送
- * - MQ 延迟重试机制
- * - 并发控制（防止 DashScope 限流）
+ * v5.0 新增功能：
+ * - 页面级 PARTIAL 状态识别（部分页面 OCR 失败）
+ * - 失败页码、失败原因记录
  * </p>
  */
 @Service
@@ -65,9 +65,7 @@ public class DocumentProcessServiceImpl {
 
   /**
    * 异步处理知识库文档
-   * 1. 从OSS下载文件
-   * 2. 解析文档
-   * 3. 向量化存储
+   * v5.0 - 根据 ProcessResult 判断 SUCCESS / PARTIAL / FAILED
    *
    * @param knowledgeId 知识库ID
    */
@@ -88,13 +86,27 @@ public class DocumentProcessServiceImpl {
       statusNotifier.notifyProcessing(knowledge.getUserId(), knowledgeId);
 
       // 执行文档处理（调用公共方法）
-      int vectorCount = processDocumentCore(knowledge);
+      ProcessResult result = processDocumentCore(knowledge);
 
-      // 更新状态为已完成 + 推送（带重试）
-      updateStatusWithRetry(knowledge, "3", vectorCount);
-      statusNotifier.notifyCompleted(knowledge.getUserId(), knowledgeId, vectorCount);
+      // 根据处理结果判断最终状态
+      String finalStatus = result.getFinalStatus();
+      updateStatusWithRetry(knowledge, finalStatus, result.getChunkCount());
 
-      log.info("【处理完成】知识库 ID: {}, 向量数量: {}", knowledgeId, vectorCount);
+      // 写入页面级统计信息
+      if (!result.isNonPdf() && result.getTotalPages() > 0) {
+        updatePageStatistics(knowledge, result);
+      }
+
+      // 推送状态通知
+      if ("5".equals(finalStatus)) {
+        statusNotifier.notifyPartial(knowledge.getUserId(), knowledgeId,
+                result.getChunkCount(), result.getFailedPages(), result.getFailedPageNums());
+      } else {
+        statusNotifier.notifyCompleted(knowledge.getUserId(), knowledgeId, result.getChunkCount());
+      }
+
+      log.info("【处理完成】知识库 ID: {}, 状态: {}, 向量数量: {}",
+              knowledgeId, finalStatus, result.getChunkCount());
 
     } catch (Exception e) {
       log.error("【处理失败】知识库 ID: {}", knowledgeId, e);
@@ -132,13 +144,13 @@ public class DocumentProcessServiceImpl {
 
   /**
    * 核心文档处理逻辑（提取为公共方法，供 MQ Consumer 调用）
-   * v4.3 - 优先使用本地临时文件，节省 OSS 流量
+   * v5.0 - 返回 ProcessResult，包含页面级统计
    *
    * @param knowledge 知识库信息
-   * @return 向量数量
+   * @return 处理结果
    * @throws Exception 处理异常
    */
-  public int processDocumentCore(KnowledgeBase knowledge) throws Exception {
+  public ProcessResult processDocumentCore(KnowledgeBase knowledge) throws Exception {
     String filePath = knowledge.getFilePath();
     if (filePath == null || filePath.isEmpty()) {
       throw new ServiceException("文件路径为空，无法处理");
@@ -176,7 +188,7 @@ public class DocumentProcessServiceImpl {
     extraMetadata.put("tags", knowledge.getTags());
     extraMetadata.put("title", knowledge.getTitle());
     extraMetadata.put("file_type", knowledge.getFileType());
-    extraMetadata.put("file_path", knowledge.getFilePath());  // 添加 OSS 路径用于下载链接生成
+    extraMetadata.put("file_path", knowledge.getFilePath());
 
     // 向量化处理（使用信号量控制并发）
     return processWithSemaphore(fileBytes, knowledge.getFileName(), knowledge.getFileSize(),
@@ -184,16 +196,36 @@ public class DocumentProcessServiceImpl {
   }
 
   /**
+   * 更新页面级统计信息到知识库记录
+   */
+  private void updatePageStatistics(KnowledgeBase knowledge, ProcessResult result) {
+    try {
+      knowledge.setTotalPages(result.getTotalPages());
+      knowledge.setSuccessPages(result.getSuccessPages());
+      knowledge.setFailedPages(result.getFailedPages());
+      if (result.getFailedPageNums() != null && !result.getFailedPageNums().isEmpty()) {
+        knowledge.setFailedPageNums(result.getFailedPageNums().stream()
+                .map(String::valueOf)
+                .reduce((a, b) -> a + "," + b)
+                .orElse(""));
+      }
+      if (result.getFailureSummary() != null) {
+        knowledge.setFailureSummary(result.getFailureSummary());
+      }
+      knowledgeBaseService.updateById(knowledge);
+      log.info("【页面统计更新】知识库 ID: {}, 总页数: {}, 成功: {}, 失败: {}, 失败页码: {}",
+              knowledge.getId(), result.getTotalPages(), result.getSuccessPages(),
+              result.getFailedPages(), result.getFailedPageNums());
+    } catch (Exception e) {
+      log.warn("【页面统计更新失败】知识库 ID: {}", knowledge.getId(), e);
+    }
+  }
+
+  /**
    * v4.3 - 在临时文件夹中查找匹配的文件
-   * 根据原始文件名查找，避免重复从 OSS 下载
-   *
-   * @param originalFileName 原始文件名
-   * @param fileSize 文件大小（用于精确匹配）
-   * @return 找到的临时文件，未找到返回 null
    */
   private File findTempFile(String originalFileName, Long fileSize) {
     try {
-      // 获取临时目录
       String tempDir = System.getProperty("user.dir") + File.separator +
                       "src" + File.separator + "main" + File.separator +
                       "resources" + File.separator + "temp" + File.separator;
@@ -202,13 +234,11 @@ public class DocumentProcessServiceImpl {
         return null;
       }
 
-      // 提取文件扩展名
       String ext = "";
       if (originalFileName != null && originalFileName.contains(".")) {
         ext = originalFileName.substring(originalFileName.lastIndexOf("."));
       }
 
-      // 遍历临时目录，查找匹配的文件
       File[] files = tempDirFile.listFiles();
       if (files == null) {
         return null;
@@ -217,19 +247,16 @@ public class DocumentProcessServiceImpl {
       File bestMatch = null;
       for (File file : files) {
         if (file.isFile() && file.getName().endsWith(ext)) {
-          // 优先匹配文件大小相同的文件
           if (fileSize != null && file.length() == fileSize) {
             log.debug("【临时文件查找】找到精确匹配的临时文件: {} (大小: {})", file.getName(), file.length());
             return file;
           }
-          // 如果没有精确匹配，记住这个候选文件
           if (bestMatch == null) {
             bestMatch = file;
           }
         }
       }
 
-      // 返回最佳匹配（如果有）
       if (bestMatch != null) {
         log.debug("【临时文件查找】找到候选临时文件: {} (大小: {})", bestMatch.getName(), bestMatch.length());
       }
@@ -242,14 +269,13 @@ public class DocumentProcessServiceImpl {
 
   /**
    * 使用信号量控制并发的向量化处理
-   * 防止 DashScope 限流
+   * v5.0 - 返回 ProcessResult
    */
-  private int processWithSemaphore(byte[] fileBytes, String fileName, Long fileSize,
+  private ProcessResult processWithSemaphore(byte[] fileBytes, String fileName, Long fileSize,
                                    Long knowledgeId, Long userId, String isPublic,
                                    Map<String, Object> extraMetadata) throws Exception {
     boolean acquired = false;
     try {
-      // 尝试获取信号量，最多等待 5 分钟
       acquired = dashScopeSemaphore.tryAcquire(5, TimeUnit.MINUTES);
 
       if (!acquired) {
@@ -258,7 +284,6 @@ public class DocumentProcessServiceImpl {
 
       log.debug("【并发控制】获取信号量成功，当前可用: {}", dashScopeSemaphore.availablePermits());
 
-      // 执行向量化处理
       return vectorStoreHelper.processAndStore(fileBytes, fileName, fileSize,
               knowledgeId, userId, isPublic, extraMetadata);
 
@@ -325,7 +350,6 @@ public class DocumentProcessServiceImpl {
 
   /**
    * 更新知识库状态（带重试机制）
-   * 确保状态更新不会因为临时网络问题而失败
    */
   private void updateStatusWithRetry(KnowledgeBase knowledge, String status, Integer vectorCount) {
     int maxRetries = 3;
@@ -352,9 +376,7 @@ public class DocumentProcessServiceImpl {
         if (attempt >= maxRetries) {
           log.error("【状态更新最终失败】知识库 ID: {}, 状态: {}, 已重试 {} 次",
               knowledge.getId(), status, maxRetries);
-          // 最后一次尝试：使用新的 session 绕续重试
           try {
-            // 重新获取最新的 knowledge 对象
             KnowledgeBase latest = knowledgeBaseService.getById(knowledge.getId());
             if (latest != null) {
               latest.setVectorStatus(status);
@@ -370,7 +392,6 @@ public class DocumentProcessServiceImpl {
             log.error("【状态更新彻底失败】知识库 ID: {}, 无法更新状态", knowledge.getId(), finalEx);
           }
         } else {
-          // 等待后重试
           try {
             Thread.sleep(100 * attempt);
           } catch (InterruptedException ie) {
