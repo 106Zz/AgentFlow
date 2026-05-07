@@ -3,6 +3,7 @@ package com.agenthub.api.agent_engine.controller;
 import com.agenthub.api.agent_engine.core.ChatAgent;
 import com.agenthub.api.agent_engine.model.AgentChatRequest;
 import com.agenthub.api.agent_engine.model.AgentContext;
+import com.agenthub.api.common.utils.SecurityUtils;
 import com.agenthub.api.knowledge.service.IChatHistoryService;
 import com.agenthub.api.knowledge.service.IChatSessionService;
 import lombok.RequiredArgsConstructor;
@@ -54,7 +55,11 @@ public class AgentV2Controller {
         SseEmitter emitter = new SseEmitter(5 * 60 * 1000L); // 5分钟超时
 
         String sessionId = StringUtils.hasText(request.getSessionId()) ? request.getSessionId() : UUID.randomUUID().toString();
-        Long userIdLong = request.getUserId() != null ? Long.parseLong(request.getUserId()) : 0L;
+        Long userIdLong = SecurityUtils.getUserId();
+        if (StringUtils.hasText(request.getUserId()) && !String.valueOf(userIdLong).equals(request.getUserId())) {
+            log.warn("忽略前端传入的 userId: requestUserId={}, loginUserId={}, session={}",
+                    request.getUserId(), userIdLong, sessionId);
+        }
         String query = request.getQuery();
 
         // 添加 completion 和 error 回调，确保 emitter 正常关闭

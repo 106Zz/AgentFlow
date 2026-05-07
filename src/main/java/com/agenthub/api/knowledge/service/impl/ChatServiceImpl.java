@@ -2,6 +2,7 @@ package com.agenthub.api.knowledge.service.impl;
 
 import com.agenthub.api.common.utils.SecurityUtils;
 import com.agenthub.api.knowledge.domain.ChatHistory;
+import com.agenthub.api.knowledge.domain.ChatSession;
 import com.agenthub.api.knowledge.domain.vo.ChatRequest;
 import com.agenthub.api.knowledge.domain.vo.ChatResponse;
 import com.agenthub.api.knowledge.service.IChatHistoryService;
@@ -44,7 +45,23 @@ public class ChatServiceImpl implements IChatService {
 
     @Override
     public List<ChatHistory> getChatHistory(String sessionId, Long userId) {
-        return chatHistoryService.getBySessionId(sessionId, userId);
+        List<ChatHistory> history = chatHistoryService.getBySessionId(sessionId, userId);
+        if (!history.isEmpty()) {
+            return history;
+        }
+
+        boolean ownsSession = chatSessionService.count(new LambdaQueryWrapper<ChatSession>()
+                .eq(ChatSession::getSessionId, sessionId)
+                .eq(ChatSession::getUserId, userId)) > 0;
+        if (!ownsSession) {
+            return history;
+        }
+
+        log.warn("会话元数据属于当前用户但历史 user_id 不匹配，使用 sessionId 兜底读取: sessionId={}, userId={}",
+                sessionId, userId);
+        return chatHistoryService.list(new LambdaQueryWrapper<ChatHistory>()
+                .eq(ChatHistory::getSessionId, sessionId)
+                .orderByAsc(ChatHistory::getCreateTime));
     }
 
     @Transactional(rollbackFor = Exception.class)
